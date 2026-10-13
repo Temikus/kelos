@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
   <meta name="color-scheme" content="light dark">
   <title>Kelos Console</title>
+  <link rel="manifest" href="/manifest.webmanifest" crossorigin="use-credentials">
   <meta name="terminal-style-nonce" content="{{STYLE_NONCE}}">
   <link rel="stylesheet" href="/assets/xterm.css">
   <link rel="stylesheet" href="/assets/styles.css">
@@ -53,7 +54,8 @@
               <span>Browser notifications</span>
               <input id="browser-alerts" type="checkbox" role="switch" aria-describedby="browser-alerts-description browser-alerts-status">
             </label>
-            <p id="browser-alerts-description">Notify when the connected Session needs input or finishes while you’re away. Keep this tab open.</p>
+            <p id="browser-alerts-description">Notify when any Session in this namespace needs input or finishes while you’re away from its conversation. Keep this tab open.</p>
+            <button id="browser-alerts-test" class="secondary-button" type="button" disabled>Send test notification</button>
             <p id="browser-alerts-status" role="status" hidden></p>
           </section>
         </details>

@@ -977,6 +977,7 @@ func TestPublishObservedSessionStatusPublishesActivityWhenWorkspaceReadFails(t *
 		true,
 		true,
 		"gpt-5.6-sol",
+		nil,
 		func(context.Context) (WorkspaceStatus, error) {
 			return WorkspaceStatus{}, readErr
 		},
@@ -997,6 +998,7 @@ func TestPublishObservedSessionStatusReturnsPublisherError(t *testing.T) {
 		true,
 		false,
 		"gpt-5.6-sol",
+		nil,
 		func(context.Context) (WorkspaceStatus, error) { return WorkspaceStatus{}, nil },
 	)
 	if !errors.Is(err, publishErr) {
@@ -1244,6 +1246,83 @@ func TestRequestInputPublishesWaitingForInputTransitions(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("input request did not finish")
+	}
+}
+
+func TestConcurrentInputRequestsPublishNotificationChanges(t *testing.T) {
+	journal := NewJournal()
+	defer journal.Close()
+	server := NewServer(Config{}, journal, &fakeProvider{})
+	server.activeTurn = "turn-1"
+	server.sessionStatusPublishInterval = time.Hour
+	ctx, cancel := context.WithCancel(t.Context())
+	statuses := make(chan *kelos.SessionNotification, 1)
+	release := make(chan struct{})
+	server.publishSessionStatus = func(ctx context.Context, active, waiting bool) error {
+		if !active || !waiting {
+			return errors.New("expected active Session waiting for input")
+		}
+		statuses <- journal.LatestNotification()
+		select {
+		case <-release:
+			return nil
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	var workers sync.WaitGroup
+	defer func() { cancel(); workers.Wait() }()
+	workers.Go(func() { server.runSessionStatusPublishes(ctx) })
+	startInput := func(id string) <-chan error {
+		result := make(chan error, 1)
+		workers.Go(func() {
+			_, err := (&turnSink{server: server, turnID: "turn-1"}).RequestInput(ctx, InputRequest{
+				ID: id, Questions: []InputQuestion{{ID: "question", Question: "Continue?"}},
+			})
+			result <- err
+		})
+		return result
+	}
+	readStatus := func() *kelos.SessionNotification {
+		t.Helper()
+		select {
+		case notification := <-statuses:
+			if notification == nil || notification.Type != kelos.SessionNotificationTypeInputRequested {
+				t.Fatalf("published notification = %#v, want input request", notification)
+			}
+			return notification
+		case <-time.After(time.Second):
+			t.Fatal("Notification change was not published")
+			return nil
+		}
+	}
+	startInput("first")
+	first := readStatus()
+	secondResult := startInput("second")
+	select {
+	case <-server.sessionStatusPublishWakeups:
+	case <-time.After(time.Second):
+		t.Fatal("Second input did not queue a publication while the first was in flight")
+	}
+	release <- struct{}{}
+	second := readStatus()
+	if second.ID == first.ID || second.ID != journal.LatestNotification().ID {
+		t.Fatalf("published notification = %#v, want latest concurrent input", second)
+	}
+	if err := server.resolveInput("second", nil, true, "cancel-second"); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-secondResult:
+		if !errors.Is(err, ErrInputCancelled) {
+			t.Fatalf("input result = %v, want cancellation", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Second input was not cancelled")
+	}
+	release <- struct{}{}
+	if got := readStatus(); got.ID != first.ID {
+		t.Fatalf("published notification = %#v, want remaining input %#v", got, first)
 	}
 }
 

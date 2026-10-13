@@ -244,7 +244,7 @@ func Run(ctx context.Context, config Config) error {
 	server.completedTurnID.Store(recovery.completedTurnID)
 	publishSessionStatus := func(ctx context.Context, active, waitingForInput bool) error {
 		model := server.runtimeStatusSnapshot().Model
-		return publishObservedSessionStatus(ctx, config.PublishSessionStatus, active, waitingForInput, model, func(ctx context.Context) (WorkspaceStatus, error) {
+		return publishObservedSessionStatus(ctx, config.PublishSessionStatus, active, waitingForInput, model, server.journal.LatestNotification(), func(ctx context.Context) (WorkspaceStatus, error) {
 			return readWorkspaceStatus(ctx, realWorkspaceStatusRunner{}, config.StateDir, config.WorkingDir)
 		})
 	}
@@ -308,9 +308,9 @@ func Run(ctx context.Context, config Config) error {
 	return server.Serve(ctx)
 }
 
-func publishObservedSessionStatus(ctx context.Context, publisher SessionStatusPublisher, active, waitingForInput bool, model string, readStatus func(context.Context) (WorkspaceStatus, error)) error {
+func publishObservedSessionStatus(ctx context.Context, publisher SessionStatusPublisher, active, waitingForInput bool, model string, notification *kelos.SessionNotification, readStatus func(context.Context) (WorkspaceStatus, error)) error {
 	workspaceStatus, readErr := readStatus(ctx)
-	status := ObservedSessionStatus{Active: active, WaitingForInput: waitingForInput, Model: model}
+	status := ObservedSessionStatus{Active: active, WaitingForInput: waitingForInput, Model: model, LastNotification: notification}
 	if readErr == nil {
 		status.WorkspaceStatus = &workspaceStatus
 	} else {
@@ -1892,13 +1892,12 @@ func (s *turnSink) RequestInput(ctx context.Context, request InputRequest) (map[
 	s.server.pendingInputs[request.ID] = pending
 	s.server.inputMu.Unlock()
 	s.server.pendingInputCount.Add(1)
-	s.server.requestSessionStatusPublish()
 	defer func() {
 		s.server.inputMu.Lock()
 		delete(s.server.pendingInputs, request.ID)
 		s.server.inputMu.Unlock()
 		s.server.pendingInputCount.Add(-1)
-		s.server.requestSessionStatusPublish()
+		s.server.queueSessionStatusPublish(true)
 	}()
 
 	s.Emit(Event{
@@ -1907,6 +1906,7 @@ func (s *turnSink) RequestInput(ctx context.Context, request InputRequest) (map[
 		Questions: request.Questions,
 		Status:    "pending",
 	})
+	s.server.queueSessionStatusPublish(true)
 	select {
 	case result := <-pending.result:
 		if result.cancelled {

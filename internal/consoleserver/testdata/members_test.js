@@ -184,6 +184,7 @@ function startConsole() {
   const loaded = [];
   vm.runInNewContext(app.slice(from, to), {
     loadConfig, refreshNamespaces, errorMessage, showToast,
+    URLSearchParams, location: {search: ''},
     loadOptions: async () => { loaded.push('options'); },
     loadSessions: async () => { loaded.push('sessions'); },
     loadResources: async () => { loaded.push('resources'); },

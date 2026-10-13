@@ -64,6 +64,7 @@ interface SessionSummary {
   waitingForInput?: boolean;
   createdAt?: string;
   lastActivityAt?: string;
+  lastNotification?: {id: string; type: 'InputRequested' | 'TurnCompleted' | 'TurnFailed'; eventTime: string};
   message?: string;
   branch?: string;
   pullRequest?: SessionPullRequest;
@@ -538,6 +539,7 @@ const elements = requireElements({
   consoleSettings: document.querySelector('#console-settings'),
   settingsButton: document.querySelector('#console-settings-button'),
   browserAlerts: document.querySelector('#browser-alerts'),
+  browserAlertsTest: document.querySelector('#browser-alerts-test'),
   browserAlertsStatus: document.querySelector('#browser-alerts-status'),
   toast: document.querySelector('#toast'),
 });
@@ -630,7 +632,7 @@ const state = {
   sidebarDrag: null as SidebarDrag | null,
   browserAlertsEnabled: false,
   browserAlertsPending: false,
-  browserAlertsUnavailable: '',
+  browserAlertsMessage: '',
 };
 
 const customOption = '__custom__';
@@ -685,7 +687,12 @@ function showToast(message: string) {
 }
 
 const browserAlertsStorageKey = 'kelos-console-browser-alerts';
-const browserNotifications = new Map<string, Notification>();
+let browserNotificationRegistration: Promise<ServiceWorkerRegistration> | null = null;
+let browserNotificationQueue = Promise.resolve();
+let browserAlertGeneration = -1;
+const browserAlertEvents = new Map<string, Set<string>>();
+
+type NotificationSession = Pick<SessionSummary, 'name' | 'namespace' | 'uid'>;
 
 function bindConsoleSettings() {
   const settings = elements.consoleSettings;
@@ -699,8 +706,10 @@ function bindConsoleSettings() {
 
 function browserAlertSupportError() {
   if (!window.isSecureContext) return 'Browser alerts require HTTPS or localhost.';
-  if (typeof window.Notification !== 'function') return 'This browser does not support browser alerts.';
-  return state.browserAlertsUnavailable;
+  if (!window.Notification || !navigator.serviceWorker || !navigator.locks) {
+    return 'This browser does not support notifications here. On iPhone or iPad, add the console to your Home Screen and open it there.';
+  }
+  return '';
 }
 
 function renderBrowserAlerts() {
@@ -709,24 +718,77 @@ function renderBrowserAlerts() {
   const enabled = !unavailable && state.browserAlertsEnabled && Notification.permission === 'granted';
   elements.browserAlerts.disabled = Boolean(unavailable || blocked || state.browserAlertsPending);
   elements.browserAlerts.checked = Boolean(enabled);
+  elements.browserAlertsTest.disabled = !enabled || state.browserAlertsPending;
   elements.browserAlertsStatus.textContent = unavailable || (blocked
     ? 'Allow notifications in your browser’s site settings to enable alerts.'
-    : state.browserAlertsPending ? 'Waiting for browser permission…' : '');
+    : state.browserAlertsPending ? 'Preparing browser notifications…' : state.browserAlertsMessage);
   elements.browserAlertsStatus.hidden = !elements.browserAlertsStatus.textContent;
 }
 
+function notificationRegistration(): Promise<ServiceWorkerRegistration> {
+  if (!browserNotificationRegistration) {
+    browserNotificationRegistration = navigator.serviceWorker.register('/notifications.js').then(async registration => {
+      if (typeof registration.showNotification !== 'function') {
+        throw new Error('This browser does not support service-worker notifications');
+      }
+      if (!registration.active) {
+        const worker = registration.installing || registration.waiting;
+        if (!worker) throw new Error('The notification service worker did not start');
+        await new Promise<void>((resolve, reject) => {
+          const changed = () => {
+            if (worker.state === 'activated' || worker.state === 'redundant') {
+              worker.removeEventListener('statechange', changed);
+              if (worker.state === 'activated') resolve();
+              else reject(new Error('The notification service worker could not activate'));
+            }
+          };
+          worker.addEventListener('statechange', changed);
+          changed();
+        });
+      }
+      return registration;
+    }).catch(error => {
+      browserNotificationRegistration = null;
+      throw error;
+    });
+  }
+  return browserNotificationRegistration;
+}
+
+function queueBrowserNotification(action: () => Promise<void>, onError?: () => void) {
+  browserNotificationQueue = browserNotificationQueue.then(action).catch(error => {
+    onError?.();
+    const message = `Could not display browser notification: ${errorMessage(error)}`;
+    if (state.browserAlertsMessage !== message) showToast(message);
+    state.browserAlertsMessage = message;
+    renderBrowserAlerts();
+  });
+  return browserNotificationQueue;
+}
+
 function closeBrowserNotifications() {
-  for (const notification of browserNotifications.values()) notification.close();
-  browserNotifications.clear();
+  if (browserAlertSupportError()) return;
+  return queueBrowserNotification(async () => {
+    const registration = await navigator.serviceWorker.getRegistration('/');
+    if (!registration) return;
+    for (const notification of await registration.getNotifications()) notification.close();
+  });
 }
 
 function pruneBrowserNotifications(sessions: SessionSummary[]) {
-  const current = new Set(sessions.map(sessionViewKey));
-  for (const [key, notification] of browserNotifications) {
-    if (current.has(key)) continue;
-    notification.close();
-    browserNotifications.delete(key);
-  }
+  if (browserAlertSupportError()) return;
+  const namespace = state.namespace;
+  const current = new Map(sessions.map(session => [sessionViewKey(session), session]));
+  return queueBrowserNotification(async () => {
+    const registration = await navigator.serviceWorker.getRegistration('/');
+    if (!registration) return;
+    for (const notification of await registration.getNotifications()) {
+      const session = notification.data?.session as NotificationSession | undefined;
+      if (session?.namespace !== namespace) continue;
+      const latest = current.get(sessionViewKey(session));
+      if (!latest || latest.resetting || latest.lastNotification?.id !== notification.data.id) notification.close();
+    }
+  });
 }
 
 function loadBrowserAlertPreference() {
@@ -735,12 +797,14 @@ function loadBrowserAlertPreference() {
   } catch (_) {
     state.browserAlertsEnabled = false;
   }
+  state.browserAlertsMessage = '';
   if (!state.browserAlertsEnabled) closeBrowserNotifications();
   renderBrowserAlerts();
 }
 
 async function toggleBrowserAlerts() {
   if (state.browserAlertsPending || browserAlertSupportError()) return;
+  state.browserAlertsMessage = '';
   if (state.browserAlertsEnabled && Notification.permission === 'granted') {
     state.browserAlertsEnabled = false;
     closeBrowserNotifications();
@@ -751,15 +815,19 @@ async function toggleBrowserAlerts() {
       const permission = Notification.permission === 'default'
         ? await Notification.requestPermission()
         : Notification.permission;
-      state.browserAlertsEnabled = permission === 'granted';
-      if (!state.browserAlertsEnabled) {
+      if (permission === 'granted') {
+        await notificationRegistration();
+        state.browserAlertsEnabled = true;
+      } else {
+        state.browserAlertsEnabled = false;
         showToast(permission === 'denied'
           ? 'Browser alerts are blocked in your browser’s site settings'
           : 'Browser alerts were not enabled');
       }
     } catch (error) {
       state.browserAlertsEnabled = false;
-      showToast(`Could not enable browser alerts: ${errorMessage(error)}`);
+      state.browserAlertsMessage = `Could not enable browser notifications: ${errorMessage(error)}`;
+      showToast(state.browserAlertsMessage);
     } finally {
       state.browserAlertsPending = false;
     }
@@ -772,55 +840,107 @@ async function toggleBrowserAlerts() {
   renderBrowserAlerts();
 }
 
-function notifySessionEvent(event: ConsoleEvent) {
-  if (!state.selected || state.replayingHistory || (event.id && event.id <= state.lastEventID)) return;
-  let title: string;
-  let body: string;
-  if (event.type === 'input.requested') {
-    title = 'Input needed';
-    body = 'Your Session is waiting for an answer.';
-  } else if (event.type === 'turn.completed' && event.status === 'completed') {
-    title = 'Work completed';
-    body = 'Your Session has finished its work.';
-  } else if (event.type === 'turn.completed' && event.status === 'failed') {
-    title = 'Work failed';
-    body = 'Open the conversation to see the error.';
-  } else {
-    return;
-  }
-  if (!state.browserAlertsEnabled || browserAlertSupportError() || Notification.permission !== 'granted') return;
-  if (document.visibilityState === 'visible' && document.hasFocus()
-      && state.consoleView === 'sessions' && !elements.messages.hidden) return;
+function browserAlertsAvailable() {
+  return state.browserAlertsEnabled && !browserAlertSupportError() && Notification.permission === 'granted';
+}
 
-  const session = state.selected;
-  const key = sessionViewKey(session);
-  try {
-    browserNotifications.get(key)?.close();
-    const notification = new Notification(`${title} · ${sessionDisplayName(session)}`, {
-      body: `${session.namespace} · ${body}`,
-      tag: `kelos-session-${key}`,
-    });
-    browserNotifications.set(key, notification);
-    notification.addEventListener('close', () => {
-      if (browserNotifications.get(key) === notification) browserNotifications.delete(key);
-    });
-    notification.addEventListener('click', () => {
-      notification.close();
-      window.focus();
-      if (session.namespace !== state.namespace) return;
-      const current = state.sessions.find(item => sessionViewKey(item) === key);
-      if (!current) {
-        showToast(`Session ${session.name} is no longer available`);
-        return;
-      }
-      selectSession(current);
-      setConsoleView('sessions');
-    });
-  } catch (error) {
-    state.browserAlertsUnavailable = 'This browser could not display alerts from the console.';
-    closeBrowserNotifications();
+function viewingSession(session: NotificationSession) {
+  return document.visibilityState === 'visible' && document.hasFocus()
+    && state.consoleView === 'sessions' && !elements.messages.hidden
+    && state.selected && sessionViewKey(state.selected) === sessionViewKey(session);
+}
+
+function notifySessions(sessions: SessionSummary[]) {
+  const initial = browserAlertGeneration !== state.namespaceGeneration;
+  if (initial) {
+    browserAlertGeneration = state.namespaceGeneration;
+    browserAlertEvents.clear();
+  }
+  const current = new Set(sessions.map(sessionViewKey));
+  for (const key of browserAlertEvents.keys()) {
+    if (current.has(key)) continue;
+    browserAlertEvents.delete(key);
+    try {
+      window.localStorage.removeItem(`kelos-console-notification-${key}`);
+    } catch (_) {}
+  }
+  for (const session of sessions) {
+    const key = sessionViewKey(session);
+    const notification = session.lastNotification;
+    const seen = browserAlertEvents.get(key) || new Set<string>();
+    browserAlertEvents.set(key, seen);
+    if (!notification || seen.has(notification.id)) continue;
+    seen.add(notification.id);
+    if (initial || !browserAlertsAvailable() || viewingSession(session)) continue;
+    const generation = state.namespaceGeneration;
+    queueBrowserNotification(async () => {
+      const registration = await notificationRegistration();
+      await navigator.locks.request(`kelos-session-${key}`, async () => {
+        const latest = state.sessions.find(item => sessionViewKey(item) === key);
+        if (generation !== state.namespaceGeneration || !browserAlertsAvailable() || !latest
+            || latest.lastNotification?.id !== notification.id || viewingSession(latest)) return;
+        const descriptions = {
+          InputRequested: ['Input needed', 'Your Session is waiting for an answer.'],
+          TurnCompleted: ['Work completed', 'Your Session has finished its work.'],
+          TurnFailed: ['Work failed', 'Open the conversation to see the error.'],
+        };
+        const description = descriptions[notification.type];
+        if (!description || latest.resetting) return;
+        const options = {
+          body: `${latest.namespace} · ${description[1]}`,
+          tag: `kelos-session-${key}`,
+          renotify: true,
+          timestamp: Date.parse(notification.eventTime),
+          data: {id: notification.id, session: {name: latest.name, namespace: latest.namespace, uid: latest.uid}},
+        };
+        const storageKey = `kelos-console-notification-${key}`;
+        try {
+          if (window.localStorage.getItem(storageKey) === notification.id) return;
+        } catch (_) {}
+        const displayed = await registration.getNotifications({tag: options.tag});
+        if (displayed.some(item => item.data?.id === notification.id)) return;
+        await registration.showNotification(`${description[0]} · ${sessionDisplayName(latest)}`, options);
+        try {
+          window.localStorage.setItem(storageKey, notification.id);
+        } catch (_) {}
+        state.browserAlertsMessage = '';
+        renderBrowserAlerts();
+      });
+    }, () => { seen.delete(notification.id); });
+  }
+}
+
+function testBrowserNotification() {
+  if (!browserAlertsAvailable()) return;
+  return queueBrowserNotification(async () => {
+    const registration = await notificationRegistration();
+    if (!browserAlertsAvailable()) return;
+    const options = {
+      body: 'You will receive alerts for Sessions in the active namespace while the console is open.',
+      tag: 'kelos-notification-test',
+      renotify: true,
+    };
+    await registration.showNotification('Kelos notifications are enabled', options);
+    state.browserAlertsMessage = 'Test sent. If no notification appeared, check your browser’s notifications in system settings and Focus / Do Not Disturb.';
     renderBrowserAlerts();
-    showToast(`Could not display browser alert: ${errorMessage(error)}`);
+  });
+}
+
+async function openNotificationSession(target: NotificationSession) {
+  try {
+    await consoleReady;
+    if (target.namespace !== state.namespace) {
+      await refreshNamespaces();
+      await switchNamespace(target.namespace);
+    } else {
+      await loadSessions();
+    }
+    const session = state.sessions.find(item => sessionViewKey(item) === sessionViewKey(target));
+    if (!session) throw new Error(`Session ${target.name} is no longer available`);
+    selectSession(session);
+    setConsoleView('sessions');
+  } catch (error) {
+    showToast(errorMessage(error));
   }
 }
 
@@ -1777,7 +1897,7 @@ async function openResourceDetail(collection: ResourceDescriptor, item: Resource
   await Promise.all([manifestRequest, logsRequest]);
 }
 
-function sessionKey(session: SessionSummary) {
+function sessionKey(session: Pick<SessionSummary, 'name' | 'namespace'>) {
   return `${session.namespace}/${session.name}`;
 }
 
@@ -1785,7 +1905,7 @@ function sessionDisplayName(session?: SessionSummary | null) {
   return session?.displayName || session?.name || '';
 }
 
-function sessionViewKey(session: SessionSummary) {
+function sessionViewKey(session: NotificationSession) {
   return `${sessionKey(session)}/${session.uid || 'unknown'}`;
 }
 
@@ -2827,6 +2947,7 @@ async function loadSessions({quiet = false} = {}) {
     if (generation !== state.namespaceGeneration || listGeneration !== state.sessionListGeneration) return;
     state.sessions = sessions;
     pruneBrowserNotifications(sessions);
+    notifySessions(sessions);
     renderSectionOptions();
     if (state.selected) {
       const selected = state.selected;
@@ -3014,7 +3135,6 @@ async function switchNamespace(namespace) {
   namespace = namespace.trim();
   if (namespace === state.namespace) return;
   if (namespace && !state.namespaces.includes(namespace)) throw new Error('Choose an accessible namespace.');
-  closeBrowserNotifications();
   const hadLoadedSource = Boolean(state.loadedSource);
   state.namespace = namespace;
   state.namespaceGeneration += 1;
@@ -4726,7 +4846,6 @@ function handleEvent(event) {
       return;
     }
   }
-  notifySessionEvent(event);
   if (event.id) state.lastEventID = Math.max(state.lastEventID, event.id);
   const recoveredCompletion = state.runtimeRecoveryActive && event.type === 'turn.completed' && event.status === 'interrupted';
   if (state.runtimeRecoveryActive && !isRuntimeRecoveryEvent(event)) state.runtimeRecoveryActive = false;
@@ -6413,7 +6532,7 @@ requiredElement('#refresh-console').addEventListener('click', () => {
   void refreshConsole();
 });
 requiredElement('#logout').addEventListener('click', async () => {
-  closeBrowserNotifications();
+  await closeBrowserNotifications();
   const result = await api<{logoutURL?: string}>('/api/logout', {method: 'POST'}).catch(() => undefined);
   window.location.replace(result?.logoutURL || '/login');
 });
@@ -6459,20 +6578,30 @@ document.addEventListener('keydown', event => {
 
 bindConsoleSettings();
 elements.browserAlerts.addEventListener('change', toggleBrowserAlerts);
+elements.browserAlertsTest.addEventListener('click', testBrowserNotification);
 window.addEventListener('focus', renderBrowserAlerts);
-window.addEventListener('pagehide', closeBrowserNotifications);
+navigator.serviceWorker?.addEventListener('message', event => {
+  if (event.data?.type === 'notification.clicked' && event.data.session) void openNotificationSession(event.data.session);
+});
 window.addEventListener('storage', event => {
   if (event.key === browserAlertsStorageKey || event.key === null) loadBrowserAlertPreference();
 });
 loadBrowserAlertPreference();
 
 const configReady = loadConfig();
-configReady.then(discoverNamespaces => {
+const consoleReady = configReady.then(discoverNamespaces => {
   if (discoverNamespaces) void refreshNamespaces().catch(error => showToast(errorMessage(error)));
   return Promise.all([loadOptions(), loadSessions(), loadResources()]);
 }).then(() => {
   setConsoleView('overview');
 }).catch(error => showToast(error.message));
+void consoleReady.then(() => {
+  const target = new URLSearchParams(location.search);
+  if (target.has('session') && target.has('namespace')) {
+    void openNotificationSession({name: target.get('session')!, namespace: target.get('namespace')!, uid: target.get('uid') || undefined});
+    window.history.replaceState(null, '', location.pathname);
+  }
+});
 window.setInterval(() => loadSessions({quiet: true}), 5000);
 window.setInterval(() => loadResources({quiet: true}), 10000);
 window.setInterval(() => {

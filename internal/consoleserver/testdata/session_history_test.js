@@ -322,7 +322,7 @@ global.resolveInputCard = () => {};
 global.scrollToBottom = () => {};
 global.interruptActiveTurn = () => { interruptRequests++; };
 global.showToast = (message) => { toasts.push(message); };
-global.notifySessionEvent = () => {};
+global.notifySessions = () => {};
 global.pruneBrowserNotifications = () => {};
 global.closeSessionSectionEditor = () => {};
 

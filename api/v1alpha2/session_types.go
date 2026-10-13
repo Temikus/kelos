@@ -181,6 +181,13 @@ type SessionStatus struct {
 	// +optional
 	LastActivityTime *metav1.Time `json:"lastActivityTime,omitempty"`
 
+	// LastNotification describes the latest input request or turn outcome needing attention.
+	// Answered or cancelled requests are excluded without restoring older outcomes.
+	// If no pending request or later outcome remains, the field is cleared.
+	// Interrupted turns and removal of the event from retained history also clear it.
+	// +optional
+	LastNotification *SessionNotification `json:"lastNotification,omitempty"`
+
 	// Model is the model reported by the Session runtime.
 	// +optional
 	Model string `json:"model,omitempty"`
@@ -200,6 +207,33 @@ type SessionStatus struct {
 	// +patchMergeKey=type
 	// +patchStrategy=merge
 	Conditions []metav1.Condition `json:"conditions,omitempty" patchStrategy:"merge" patchMergeKey:"type"`
+}
+
+// SessionNotificationType identifies why a Session needs attention.
+type SessionNotificationType string
+
+const (
+	// SessionNotificationTypeInputRequested means the Session needs an answer.
+	SessionNotificationTypeInputRequested SessionNotificationType = "InputRequested"
+	// SessionNotificationTypeTurnCompleted means the Session finished its work.
+	SessionNotificationTypeTurnCompleted SessionNotificationType = "TurnCompleted"
+	// SessionNotificationTypeTurnFailed means the Session's work failed.
+	SessionNotificationTypeTurnFailed SessionNotificationType = "TurnFailed"
+)
+
+// SessionNotification describes an event that may need a user's attention.
+type SessionNotification struct {
+	// ID is an opaque event identity, stable across runtime restarts.
+	// Clients should compare IDs only for equality.
+	// +kubebuilder:validation:MinLength=1
+	ID string `json:"id"`
+
+	// Type identifies the reason for the notification.
+	// +kubebuilder:validation:Enum=InputRequested;TurnCompleted;TurnFailed
+	Type SessionNotificationType `json:"type"`
+
+	// EventTime is when the event occurred.
+	EventTime metav1.Time `json:"eventTime"`
 }
 
 // +genclient
