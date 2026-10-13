@@ -85,6 +85,7 @@ function harness(shared = {}) {
     selectSession: item => { selected.push(item); context.state.selected = item; },
     setConsoleView: view => { context.state.consoleView = view; },
     renderSectionOptions() {}, renderHeader() {}, renderSessions() {}, discardSessionView() {},
+    pruneCompletionReads() {},
     resetNamespaceReferences() {}, renderSessionSourceOptions() {}, renderCredentialOptions() {},
     renderWorkspaceOptions() {}, renderAgentConfigOptions() {}, renderOverview() {}, renderResourceKindOptions() {}, renderResources() {},
     async loadOptions() {}, async loadResources() {},

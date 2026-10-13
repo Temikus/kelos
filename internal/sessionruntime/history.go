@@ -274,7 +274,8 @@ func projectHistory(source []Event) ([]historyItem, HistoryState, []Event) {
 			event.Text = boundedHistoryText(event.Text, maxHistoryNoticeBytes)
 			addItem(event.ID, event.ID, normalizedHistoryEvent(event))
 		case EventTurnCompleted:
-			if event.Status == "interrupted" {
+			if event.Status == "completed" || event.Status == "failed" || event.Status == "interrupted" {
+				event.Text = boundedHistoryText(event.Text, maxHistoryNoticeBytes)
 				addItem(event.ID, event.ID, normalizedHistoryEvent(event))
 			}
 		}

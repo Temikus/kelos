@@ -2756,6 +2756,54 @@ func TestServerResetsHistoryForReplacedJournalWithOverlappingIDs(t *testing.T) {
 	}
 }
 
+func TestServerCompletionNotificationIdentity(t *testing.T) {
+	journal := NewJournal()
+	defer journal.Close()
+	if err := journal.Append(Event{Type: EventTurnCompleted, Status: "completed"}); err != nil {
+		t.Fatal(err)
+	}
+	want := journal.LatestNotification().ID
+	server := &Server{journal: journal}
+	serverConnection, clientConnection := net.Pipe()
+	defer clientConnection.Close()
+	if err := clientConnection.SetDeadline(time.Now().Add(5 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	go server.handleConnection(t.Context(), serverConnection)
+	if err := json.NewEncoder(clientConnection).Encode(ClientRequest{Type: "subscribe", HistoryBounds: true, HistoryItems: DefaultHistoryItemLimit, HistoryBytes: DefaultHistoryByteLimit}); err != nil {
+		t.Fatal(err)
+	}
+	decoder := json.NewDecoder(clientConnection)
+	for _, kind := range []string{EventHistoryStart, EventTurnCompleted, EventHistoryEnd} {
+		var event Event
+		if err := decoder.Decode(&event); err != nil {
+			t.Fatal(err)
+		}
+		if event.Type != kind {
+			t.Fatalf("event type = %q, want %q", event.Type, kind)
+		}
+		if kind == EventTurnCompleted && event.NotificationID != want {
+			t.Fatalf("history notification ID = %q, want %q", event.NotificationID, want)
+		}
+	}
+	for _, status := range []string{"completed", "failed", "interrupted"} {
+		if err := journal.Append(Event{Type: EventTurnCompleted, Status: status}); err != nil {
+			t.Fatal(err)
+		}
+		var event Event
+		if err := decoder.Decode(&event); err != nil {
+			t.Fatal(err)
+		}
+		want = ""
+		if notification := journal.LatestNotification(); notification != nil {
+			want = notification.ID
+		}
+		if event.Status != status || event.NotificationID != want {
+			t.Fatalf("live event = %#v, want status %q and notification ID %q", event, status, want)
+		}
+	}
+}
+
 func TestServerPagesProjectedHistoryItems(t *testing.T) {
 	journal := NewJournal()
 	defer journal.Close()
@@ -2783,7 +2831,7 @@ func TestServerPagesProjectedHistoryItems(t *testing.T) {
 	if err := json.NewEncoder(clientConnection).Encode(ClientRequest{
 		Type:          "subscribe",
 		HistoryBounds: true,
-		HistoryItems:  2,
+		HistoryItems:  3,
 		HistoryBytes:  DefaultHistoryByteLimit,
 	}); err != nil {
 		t.Fatal(err)
@@ -2811,7 +2859,7 @@ func TestServerPagesProjectedHistoryItems(t *testing.T) {
 		}
 		retained = append(retained, event)
 	}
-	wantIDs := []int64{7, 9}
+	wantIDs := []int64{7, 9, 10}
 	if len(retained) != len(wantIDs) {
 		t.Fatalf("retained events = %#v, want IDs %v", retained, wantIDs)
 	}
@@ -2823,7 +2871,10 @@ func TestServerPagesProjectedHistoryItems(t *testing.T) {
 			t.Fatalf("projected event retains turn state: %#v", retained)
 		}
 	}
-	assertEventTypes(t, retained, EventUserMessage, EventAssistantMessage)
+	assertEventTypes(t, retained, EventUserMessage, EventAssistantMessage, EventTurnCompleted)
+	if retained[2].NotificationID != journal.LatestNotification().ID {
+		t.Fatalf("completion notification ID = %q, want %q", retained[2].NotificationID, journal.LatestNotification().ID)
+	}
 	if end.HistoryState == nil {
 		t.Fatalf("history end = %#v, want state snapshot", end)
 	}
@@ -2856,7 +2907,7 @@ func TestServerPagesProjectedHistoryItems(t *testing.T) {
 		}
 		retained = append(retained, event)
 	}
-	wantIDs = []int64{1, 5}
+	wantIDs = []int64{1, 5, 6}
 	if len(retained) != len(wantIDs) {
 		t.Fatalf("older retained events = %#v, want IDs %v", retained, wantIDs)
 	}
@@ -2865,7 +2916,10 @@ func TestServerPagesProjectedHistoryItems(t *testing.T) {
 			t.Fatalf("older retained events = %#v, want projected IDs %v", retained, wantIDs)
 		}
 	}
-	assertEventTypes(t, retained, EventUserMessage, EventAssistantMessage)
+	assertEventTypes(t, retained, EventUserMessage, EventAssistantMessage, EventTurnCompleted)
+	if retained[2].NotificationID != journal.notificationID(6) {
+		t.Fatalf("older completion notification ID = %q, want %q", retained[2].NotificationID, journal.notificationID(6))
+	}
 }
 
 func TestServerPreservesStateOutsideProjectedHistoryPage(t *testing.T) {

@@ -683,6 +683,16 @@ connect to Sessions across namespaces while operating on one active namespace
 at a time. Users can switch the active namespace live from the sidebar.
 `consoleServer.defaultNamespace` sets its initial value, and resource inventory,
 Session form options, and credential options are loaded only from the active namespace.
+Completed and failed results have a blue dot, bold Session title, and
+**Completed · Unread** or **Failed · Unread** label until their turn ending is
+visible in the focused **Conversation** view. The **Sessions** navigation item
+counts unread results in the active namespace. These markers track the latest
+retained notification for each Session, independently of browser notifications;
+input requests and interrupted turns do not receive an unread completion marker.
+Read receipts persist in this browser and synchronize across its tabs. They are
+separate for each signed-in username; token authentication shares the browser's
+read state. Clearing browser storage clears the receipts. If storage is
+unavailable, receipts last only for the current tab. They do not sync across devices.
 Open **Settings** using the gear icon in the sidebar footer, then enable
 **Browser notifications** to opt in. The Settings popover also shows permission
 or browser-support guidance when needed. Press Escape or click outside to close it.

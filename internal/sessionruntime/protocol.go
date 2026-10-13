@@ -38,6 +38,8 @@ const (
 type Event struct {
 	ID   int64  `json:"id,omitempty"`
 	Type string `json:"type"`
+	// NotificationID matches Session.status.lastNotification.id for completed or failed turns.
+	NotificationID string `json:"notificationId,omitempty"`
 	// Timestamp records when a durable conversation event was first appended.
 	Timestamp      *time.Time        `json:"timestamp,omitempty"`
 	RequestID      string            `json:"requestId,omitempty"`

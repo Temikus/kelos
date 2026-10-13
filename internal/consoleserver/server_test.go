@@ -1047,6 +1047,17 @@ func TestApplicationBrowserAlertsBehavior(t *testing.T) {
 	}
 }
 
+func TestApplicationUnreadCompletionsBehavior(t *testing.T) {
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("Node.js is not installed")
+	}
+	command := exec.Command(node, "testdata/unread_completions_test.js")
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("running unread completion tests: %v\n%s", err, output)
+	}
+}
+
 func TestNotificationAssets(t *testing.T) {
 	server := testServer(t)
 	for _, test := range []struct {

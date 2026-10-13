@@ -3,6 +3,9 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 
+global.renderUnreadCount = () => false;
+global.scheduleCompletionRead = () => false;
+
 const application = fs.readFileSync(path.join(__dirname, '..', 'web', 'app.js'), 'utf8');
 
 function applicationSlice(start, end) {
@@ -16,7 +19,7 @@ function applicationSlice(start, end) {
 vm.runInThisContext(applicationSlice('function errorMessage', 'function requireElements'), {filename: 'app.js'});
 vm.runInThisContext(applicationSlice('const allResourceKind', 'async function loadResources'), {filename: 'app.js'});
 vm.runInThisContext(applicationSlice('async function refreshConsole', 'async function openResourceDetail'), {filename: 'app.js'});
-vm.runInThisContext(applicationSlice('function setResourceDetailView', 'function sessionKey'), {filename: 'app.js'});
+vm.runInThisContext(applicationSlice('function setResourceDetailView', 'const completionReadPrefix'), {filename: 'app.js'});
 
 vm.runInThisContext(applicationSlice('function renderSessions(', 'function createSessionListItem('), {filename: 'app.js'});
 

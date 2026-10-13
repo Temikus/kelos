@@ -407,7 +407,7 @@ func runSessionPlainTerminalWithWidth(ctx context.Context, input io.Reader, outp
 					write("%s\n\n", formatter.turnSeparator(elapsed, terminalWidth()))
 					activeTurnID = ""
 					activeTurnStarted = time.Time{}
-				} else {
+				} else if !replayingHistory {
 					write("\n")
 				}
 			case sessionruntime.EventError:

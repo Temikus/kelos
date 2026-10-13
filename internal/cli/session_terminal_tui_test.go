@@ -822,6 +822,39 @@ func TestSessionTUIAppliesStateFromProjectedHistory(t *testing.T) {
 	}
 }
 
+func TestSessionTUIReplaysProjectedCompletedTurns(t *testing.T) {
+	for _, status := range []string{"completed", "failed"} {
+		t.Run(status, func(t *testing.T) {
+			model, _ := newSessionTUITestModel()
+			model.applyEvent(sessionruntime.Event{Type: sessionruntime.EventHistoryStart})
+			model.applyEvent(sessionruntime.Event{Type: sessionruntime.EventUserMessage, Text: "question"})
+			model.applyEvent(sessionruntime.Event{Type: sessionruntime.EventAssistantMessage, Text: "answer"})
+			model.applyEvent(sessionruntime.Event{Type: sessionruntime.EventTurnCompleted, Status: status})
+			if len(model.blocks) != 2 || model.blocks[0].kind != sessionTUIBlockUser || model.blocks[1].kind != sessionTUIBlockAssistant {
+				t.Fatalf("projected history blocks = %#v, want one question and one answer", model.blocks)
+			}
+			model.applyEvent(sessionruntime.Event{Type: sessionruntime.EventHistoryEnd})
+			model.applyEvent(sessionruntime.Event{Type: sessionruntime.EventHistoryStart, HistoryPage: true, RequestID: "older"})
+			model.applyEvent(sessionruntime.Event{Type: sessionruntime.EventUserMessage, Text: "older question"})
+			model.applyEvent(sessionruntime.Event{Type: sessionruntime.EventAssistantMessage, Text: "older answer"})
+			model.applyEvent(sessionruntime.Event{Type: sessionruntime.EventTurnCompleted, Status: status})
+			model.applyEvent(sessionruntime.Event{Type: sessionruntime.EventHistoryEnd, HistoryPage: true, RequestID: "older"})
+			var users, assistants int
+			for _, block := range model.blocks {
+				if block.kind == sessionTUIBlockUser {
+					users++
+				}
+				if block.kind == sessionTUIBlockAssistant {
+					assistants++
+				}
+			}
+			if users != 2 || assistants != 2 {
+				t.Fatalf("history has %d user blocks and %d assistant blocks, want two of each", users, assistants)
+			}
+		})
+	}
+}
+
 func TestSessionTUICancelsPartialHistoryPageOnReconnect(t *testing.T) {
 	model, _ := newSessionTUITestModel()
 	model.applyEvent(sessionruntime.Event{Type: sessionruntime.EventHistoryStart, HistoryLimited: true, HistoryCursor: "cursor-1"})

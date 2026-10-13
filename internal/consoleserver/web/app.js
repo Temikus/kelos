@@ -35,6 +35,7 @@
         sessionActionDelete: document.querySelector('#session-action-delete'),
         overviewButton: document.querySelector('#console-overview'),
         sessionsButton: document.querySelector('#console-sessions'),
+        sessionsUnreadCount: document.querySelector('#sessions-unread-count'),
         resourcesButton: document.querySelector('#console-resources'),
         adminButton: document.querySelector('#console-admin'),
         adminView: document.querySelector('#admin-view'),
@@ -185,6 +186,7 @@
         toast: document.querySelector('#toast'),
     });
     const state = {
+        username: '',
         sessions: [],
         selected: null,
         socket: null,
@@ -641,6 +643,7 @@
             void loadAdmin();
         updateJumpToLatest();
         setSidebarOpen(false);
+        scheduleCompletionRead();
     }
     function resourceAge(createdAt) {
         return createdAt ? formatSessionRecency({ createdAt }, true) : '—';
@@ -1573,6 +1576,118 @@ ${specs[collection.resource]}`;
         const logsRequest = showTaskLogs ? loadResourceTaskLogs(state.resourceDetailTask, generation) : Promise.resolve();
         await Promise.all([manifestRequest, logsRequest]);
     }
+    const completionReadPrefix = 'kelos-console-completion-read:';
+    const readCompletions = new Set();
+    let completionReadFrame = null;
+    function completionReadKey(session, notificationID) {
+        return completionReadPrefix + JSON.stringify([state.username, sessionViewKey(session), notificationID]);
+    }
+    function completionWasRead(key) {
+        if (readCompletions.has(key))
+            return true;
+        try {
+            return window.localStorage.getItem(key) === '1';
+        }
+        catch {
+            return false;
+        }
+    }
+    function forgetCompletionRead(key) {
+        readCompletions.delete(key);
+        try {
+            window.localStorage.removeItem(key);
+        }
+        catch { }
+    }
+    function pruneCompletionReads(sessions) {
+        const current = new Set(sessions.map(sessionViewKey));
+        const keys = new Set(readCompletions);
+        try {
+            for (let index = 0; index < window.localStorage.length; index++) {
+                const key = window.localStorage.key(index);
+                if (key?.startsWith(completionReadPrefix))
+                    keys.add(key);
+            }
+        }
+        catch { }
+        for (const key of keys) {
+            let username;
+            let session;
+            try {
+                [username, session] = JSON.parse(key.slice(completionReadPrefix.length));
+            }
+            catch {
+                continue;
+            }
+            if (username !== state.username || typeof session !== 'string'
+                || !session.startsWith(`${state.namespace}/`) || current.has(session))
+                continue;
+            forgetCompletionRead(key);
+        }
+    }
+    function hasUnreadCompletion(session) {
+        const notification = session.lastNotification;
+        return !session.resetting && notification && ['TurnCompleted', 'TurnFailed'].includes(notification.type)
+            ? !completionWasRead(completionReadKey(session, notification.id)) : false;
+    }
+    function renderUnreadCount() {
+        const count = state.sessions.filter(hasUnreadCompletion).length;
+        elements.sessionsUnreadCount.hidden = count === 0;
+        elements.sessionsUnreadCount.textContent = String(count);
+        elements.sessionsButton.setAttribute('aria-label', count ? `Sessions, ${count} unread ${count === 1 ? 'result' : 'results'} in ${state.namespace}` : 'Sessions');
+    }
+    function markVisibleCompletionRead() {
+        const session = state.selected;
+        if (!session || session.resetting || !viewingSession(session)
+            || state.replayingHistory || !state.currentView?.historyLoaded
+            || document.querySelector('dialog[open]')
+            || elements.sidebar.classList.contains('open'))
+            return;
+        const dividers = Array.from(elements.messages.querySelectorAll('.turn-divider'))
+            .filter(divider => divider.dataset.notificationId);
+        const divider = dividers.at(-1);
+        if (!divider)
+            return;
+        const key = completionReadKey(session, divider.dataset.notificationId);
+        if (!completionWasRead(key)) {
+            const viewport = elements.messages.getBoundingClientRect();
+            const bounds = divider.getBoundingClientRect();
+            if (bounds.height <= 0 || bounds.bottom <= viewport.top || bounds.top >= viewport.bottom)
+                return;
+            readCompletions.add(key);
+            try {
+                // Each result has its own receipt so a stale tab cannot overwrite a newer read.
+                window.localStorage.setItem(key, '1');
+            }
+            catch {
+                // Reading still works for this tab when browser storage is unavailable.
+            }
+            renderSessions();
+        }
+        // Only discard results known to precede this one; another tab may have read a later result.
+        for (const older of dividers.slice(0, -1)) {
+            const id = older.dataset.notificationId;
+            if (id !== session.lastNotification?.id)
+                forgetCompletionRead(completionReadKey(session, id));
+        }
+    }
+    function scheduleCompletionRead() {
+        if (completionReadFrame !== null)
+            return;
+        completionReadFrame = window.requestAnimationFrame(() => {
+            completionReadFrame = null;
+            markVisibleCompletionRead();
+        });
+    }
+    function syncCompletionRead(event) {
+        if (event.key !== null && !event.key.startsWith(completionReadPrefix))
+            return;
+        if (event.key === null)
+            readCompletions.clear();
+        else
+            readCompletions.delete(event.key);
+        renderSessions();
+    }
     function sessionKey(session) {
         return `${session.namespace}/${session.name}`;
     }
@@ -2087,6 +2202,8 @@ ${specs[collection.resource]}`;
         return link;
     }
     function renderSessions() {
+        renderUnreadCount();
+        scheduleCompletionRead();
         if (state.sessionActionKey)
             state.sessionActionTrigger = null;
         elements.list.replaceChildren();
@@ -2163,6 +2280,9 @@ ${specs[collection.resource]}`;
         const key = sessionKey(session);
         const assigningSection = state.sectionAssignments.has(key);
         item.className = `session-item${state.selected && sessionKey(state.selected) === key ? ' active' : ''}${assigningSection ? ' section-saving' : ''}`;
+        const unread = hasUnreadCompletion(session);
+        if (unread)
+            item.classList.add('unread');
         const button = document.createElement('button');
         button.className = 'session-item-select';
         button.type = 'button';
@@ -2178,8 +2298,17 @@ ${specs[collection.resource]}`;
         name.textContent = sessionDisplayName(session);
         titleRow.append(name);
         const timestamp = createSessionTimestamp(session, true, 'session-item-time');
+        const recency = document.createElement('span');
+        recency.className = 'session-item-recency';
         if (timestamp)
-            titleRow.append(timestamp);
+            recency.append(timestamp);
+        if (unread) {
+            const unreadDot = document.createElement('span');
+            unreadDot.className = 'session-unread-dot';
+            unreadDot.setAttribute('aria-hidden', 'true');
+            recency.append(unreadDot);
+        }
+        titleRow.append(recency);
         const meta = document.createElement('div');
         meta.className = 'session-item-meta';
         const provider = document.createElement('span');
@@ -2201,6 +2330,12 @@ ${specs[collection.resource]}`;
         }
         meta.append(namespace, activity);
         text.append(titleRow, meta);
+        if (unread) {
+            const label = document.createElement('div');
+            label.className = 'session-unread-label';
+            label.textContent = session.lastNotification?.type === 'TurnFailed' ? 'Failed · Unread' : 'Completed · Unread';
+            text.append(label);
+        }
         if (session.branch) {
             const branch = document.createElement('div');
             branch.className = 'session-item-branch';
@@ -2628,6 +2763,7 @@ ${specs[collection.resource]}`;
             if (generation !== state.namespaceGeneration || listGeneration !== state.sessionListGeneration)
                 return;
             state.sessions = sessions;
+            pruneCompletionReads(sessions);
             pruneBrowserNotifications(sessions);
             notifySessions(sessions);
             renderSectionOptions();
@@ -2668,6 +2804,7 @@ ${specs[collection.resource]}`;
     }
     async function loadIdentity() {
         const config = await api('/api/config');
+        state.username = config.username || '';
         const identity = requiredElement('#console-identity');
         identity.hidden = !config.username;
         identity.textContent = config.username ? `Signed in as ${config.username}` : '';
@@ -4383,6 +4520,7 @@ spec:
         updateCurrentRequest();
         updateJumpToLatest();
         continuePromptJump();
+        scheduleCompletionRead();
     }
     function openPromptHistory() {
         if (!state.selected || !state.socket || state.socket.readyState !== WebSocket.OPEN)
@@ -5490,6 +5628,7 @@ spec:
         updateJumpToLatest();
         if (terminalActive)
             sessionTerminal.show(state.selected);
+        scheduleCompletionRead();
     }
     function handleViewTabKeydown(event) {
         const tabs = [elements.conversationTab, elements.changesTab, elements.terminalTab].filter(tab => !tab.disabled);
@@ -5551,10 +5690,13 @@ spec:
             showToast('Active work interrupted');
         const divider = document.createElement('div');
         divider.className = 'turn-divider';
+        if (event.notificationId)
+            divider.dataset.notificationId = event.notificationId;
         if (elapsed !== null)
             divider.textContent = `Worked for ${formatSessionProgressElapsed(elapsed)}`;
         elements.messages.append(divider);
         scrollToBottom();
+        scheduleCompletionRead();
     }
     function isRuntimeRecoveryEvent(event) {
         return event.type === 'runtime.recovered'
@@ -6217,6 +6359,7 @@ spec:
     elements.messages.addEventListener('scroll', scheduleCurrentRequestUpdate);
     elements.jumpToLatest.addEventListener('click', jumpToLatest);
     elements.messages.addEventListener('scroll', handleMessagesScroll);
+    elements.messages.addEventListener('scroll', scheduleCompletionRead);
     window.addEventListener('pagehide', () => {
         sessionTerminal.close();
         if (!elements.terminalView.hidden)
@@ -6323,6 +6466,10 @@ spec:
     elements.browserAlerts.addEventListener('change', toggleBrowserAlerts);
     elements.browserAlertsTest.addEventListener('click', testBrowserNotification);
     window.addEventListener('focus', renderBrowserAlerts);
+    window.addEventListener('focus', scheduleCompletionRead);
+    window.addEventListener('resize', scheduleCompletionRead);
+    document.addEventListener('visibilitychange', scheduleCompletionRead);
+    window.addEventListener('storage', syncCompletionRead);
     navigator.serviceWorker?.addEventListener('message', event => {
         if (event.data?.type === 'notification.clicked' && event.data.session)
             void openNotificationSession(event.data.session);
