@@ -15,9 +15,10 @@ import (
 
 // ObservedSessionStatus contains the status fields owned by one Session runtime.
 type ObservedSessionStatus struct {
-	Active          bool
-	WaitingForInput bool
-	Model           string
+	Active           bool
+	WaitingForInput  bool
+	Model            string
+	LastNotification *kelos.SessionNotification
 	// WorkspaceStatus is omitted when the runtime cannot inspect the workspace.
 	WorkspaceStatus *WorkspaceStatus
 }
@@ -87,6 +88,7 @@ func NewSessionStatusPublisher(client clientv1alpha2.SessionInterface, sessionNa
 			sessionStatusPatchOperation{Op: "add", Path: "/status/conditions", Value: conditions},
 			sessionStatusPatchOperation{Op: "add", Path: "/status/lastActivityTime", Value: activityTime},
 			sessionStatusPatchOperation{Op: "add", Path: "/status/model", Value: status.Model},
+			sessionStatusPatchOperation{Op: "add", Path: "/status/lastNotification", Value: status.LastNotification},
 		)
 		if status.WorkspaceStatus != nil {
 			operations = append(operations,

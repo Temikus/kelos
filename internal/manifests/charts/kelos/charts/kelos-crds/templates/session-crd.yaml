@@ -7306,6 +7306,35 @@ spec:
                   Pod replacement does not change this timestamp.
                 format: date-time
                 type: string
+              lastNotification:
+                description: |-
+                  LastNotification describes the latest input request or turn outcome needing attention.
+                  Answered or cancelled requests are excluded without restoring older outcomes.
+                  If no pending request or later outcome remains, the field is cleared.
+                  Interrupted turns and removal of the event from retained history also clear it.
+                properties:
+                  eventTime:
+                    description: EventTime is when the event occurred.
+                    format: date-time
+                    type: string
+                  id:
+                    description: |-
+                      ID is an opaque event identity, stable across runtime restarts.
+                      Clients should compare IDs only for equality.
+                    minLength: 1
+                    type: string
+                  type:
+                    description: Type identifies the reason for the notification.
+                    enum:
+                    - InputRequested
+                    - TurnCompleted
+                    - TurnFailed
+                    type: string
+                required:
+                - eventTime
+                - id
+                - type
+                type: object
               message:
                 description: Message provides additional information about the current
                   phase.

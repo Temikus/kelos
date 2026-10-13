@@ -327,6 +327,7 @@ the Session resource and is visible through the Kubernetes API.
 | `status.podName` | Session Pod name | Output |
 | `status.podUID` | Identity of the Pod running the live conversation | Output |
 | `status.lastActivityTime` | When runtime activity was first reported or last changed; Pod replacement does not change it | Output |
+| `status.lastNotification` | Latest input request or turn outcome needing attention, with an opaque non-empty `id`, `type` (`InputRequested`, `TurnCompleted`, or `TurnFailed`), and `eventTime`. Answered or cancelled requests are excluded without restoring older outcomes; if no pending request or later outcome remains, the field is cleared. An interrupted turn or removal from retained history also clears it | Output |
 | `status.model` | Model reported by the live Session runtime; empty when the runtime does not report a model | Output |
 | `status.conditions[type=Ready]` | Whether the Session infrastructure is ready for clients | Output |
 | `status.conditions[type=Active]` | Whether the runtime has an unfinished turn or reported unfinished Claude Code background work; `reason: WaitingForInput` means the turn is waiting for a user response, and `Unknown` means activity has not been reported | Output |
@@ -685,16 +686,25 @@ Session form options, and credential options are loaded only from the active nam
 Open **Settings** using the gear icon in the sidebar footer, then enable
 **Browser notifications** to opt in. The Settings popover also shows permission
 or browser-support guidance when needed. Press Escape or click outside to close it.
-Alerts cover input requests and completed or failed work in the connected Session
-when you are away from its conversation, including in another console view,
-browser tab, or application. Clicking an alert opens that Session if it is still
-available in the active namespace. Alerts are dismissed when the console detects
-that a Session was removed or replaced. The setting is saved in this browser;
-notifications require browser permission, a secure connection (HTTPS or localhost),
-and support for notifications from an open page. Most mobile browsers do not support
-these page notifications.
-Keep the console tab open and connected: other Sessions and events replayed after
-a reconnect do not produce alerts. Interrupted work does not produce an alert.
+Alerts cover input requests and completed or failed work across the active
+namespace, including Sessions you have not selected. Each tab suppresses alerts
+for its own visible, focused conversation; another open tab can still alert for
+that Session. Tabs coordinate delivery to avoid
+repeating the same event. If browser storage is unavailable, this coordination
+lasts only while the notification is displayed. The console checks for events when
+the Session list refreshes, normally every five seconds, and can report the latest
+retained event after a connection interruption. Opening the console or switching
+namespaces establishes a baseline without notifying about existing history.
+Interrupted work does not produce an alert.
+Clicking an alert opens its Session, switching namespaces if necessary. Alerts
+are dismissed when the console detects that a Session was removed or replaced.
+The setting is saved in this browser. Notifications require browser permission,
+HTTPS or localhost, service-worker notifications, and Web Locks support. On iPhone
+and iPad, add the console to the Home Screen and open it there before enabling notifications.
+Use **Send test notification** to check delivery. If it does not appear, check
+browser and operating-system notification settings, including Focus or Do Not Disturb.
+Keep the console open: notification delivery stops when the page is closed or
+suspended by the browser. There is no server-side Web Push delivery.
 Sessions open in the **Conversation** view. Select the **Terminal** tab alongside
 **Conversation** and **Changes** on a Ready Session to start an interactive shell
 in its agent container. The shell uses the agent container's workspace and

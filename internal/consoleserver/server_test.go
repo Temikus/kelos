@@ -1047,6 +1047,26 @@ func TestApplicationBrowserAlertsBehavior(t *testing.T) {
 	}
 }
 
+func TestNotificationAssets(t *testing.T) {
+	server := testServer(t)
+	for _, test := range []struct {
+		path        string
+		contentType string
+		content     string
+	}{
+		{"/notifications.js", "text/javascript; charset=utf-8", "notificationclick"},
+		{"/manifest.webmanifest", "application/manifest+json", `"display": "standalone"`},
+	} {
+		request := httptest.NewRequest(http.MethodGet, test.path, nil)
+		request.Header.Set("Authorization", "Bearer secret-token")
+		response := httptest.NewRecorder()
+		server.ServeHTTP(response, request)
+		if response.Code != http.StatusOK || response.Header().Get("Content-Type") != test.contentType || !strings.Contains(response.Body.String(), test.content) {
+			t.Fatalf("GET %s status = %d, headers = %v, body = %s", test.path, response.Code, response.Header(), response.Body.String())
+		}
+	}
+}
+
 func TestApplicationMarkdownBehavior(t *testing.T) {
 	node, err := exec.LookPath("node")
 	if err != nil {
@@ -2120,6 +2140,7 @@ func TestSummarizeIncludesRuntimeStatus(t *testing.T) {
 		Status: kelos.SessionStatus{
 			Phase:            kelos.SessionPhaseReady,
 			LastActivityTime: &lastActivityAt,
+			LastNotification: &kelos.SessionNotification{ID: "journal/42", Type: kelos.SessionNotificationTypeInputRequested, EventTime: lastActivityAt},
 			Model:            "gpt-5.6-sol",
 			Branch:           "feature/session-status",
 			Conditions: []metav1.Condition{{
@@ -2140,6 +2161,9 @@ func TestSummarizeIncludesRuntimeStatus(t *testing.T) {
 	}
 
 	summary := summarize(session)
+	if summary.LastNotification == nil || *summary.LastNotification != *session.Status.LastNotification {
+		t.Fatalf("summarize() LastNotification = %#v, want %#v", summary.LastNotification, session.Status.LastNotification)
+	}
 	if summary.DisplayName != "chat" || summary.Active == nil || !*summary.Active || !summary.WaitingForInput || summary.Model != session.Status.Model || summary.Branch != session.Status.Branch || summary.PullRequest == nil || *summary.PullRequest != *session.Status.PullRequest || summary.Section != "Reviews" {
 		t.Fatalf("summarize() = %#v", summary)
 	}

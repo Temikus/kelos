@@ -128,24 +128,25 @@ func (c *sessionSocket) WriteMessage(messageType int, data []byte) error {
 }
 
 type sessionSummary struct {
-	Name            string                    `json:"name"`
-	DisplayName     string                    `json:"displayName"`
-	Namespace       string                    `json:"namespace"`
-	UID             string                    `json:"uid,omitempty"`
-	Provider        string                    `json:"provider"`
-	Model           string                    `json:"model,omitempty"`
-	Phase           kelos.SessionPhase        `json:"phase,omitempty"`
-	Active          *bool                     `json:"active,omitempty"`
-	WaitingForInput bool                      `json:"waitingForInput,omitempty"`
-	CreatedAt       *metav1.Time              `json:"createdAt,omitempty"`
-	LastActivityAt  *metav1.Time              `json:"lastActivityAt,omitempty"`
-	Message         string                    `json:"message,omitempty"`
-	Branch          string                    `json:"branch,omitempty"`
-	PullRequest     *kelos.SessionPullRequest `json:"pullRequest,omitempty"`
-	Section         string                    `json:"section,omitempty"`
-	Resetting       bool                      `json:"resetting,omitempty"`
-	UserSuspended   bool                      `json:"userSuspended,omitempty"`
-	IdleSuspended   bool                      `json:"idleSuspended,omitempty"`
+	Name             string                     `json:"name"`
+	DisplayName      string                     `json:"displayName"`
+	Namespace        string                     `json:"namespace"`
+	UID              string                     `json:"uid,omitempty"`
+	Provider         string                     `json:"provider"`
+	Model            string                     `json:"model,omitempty"`
+	Phase            kelos.SessionPhase         `json:"phase,omitempty"`
+	Active           *bool                      `json:"active,omitempty"`
+	WaitingForInput  bool                       `json:"waitingForInput,omitempty"`
+	CreatedAt        *metav1.Time               `json:"createdAt,omitempty"`
+	LastActivityAt   *metav1.Time               `json:"lastActivityAt,omitempty"`
+	LastNotification *kelos.SessionNotification `json:"lastNotification,omitempty"`
+	Message          string                     `json:"message,omitempty"`
+	Branch           string                     `json:"branch,omitempty"`
+	PullRequest      *kelos.SessionPullRequest  `json:"pullRequest,omitempty"`
+	Section          string                     `json:"section,omitempty"`
+	Resetting        bool                       `json:"resetting,omitempty"`
+	UserSuspended    bool                       `json:"userSuspended,omitempty"`
+	IdleSuspended    bool                       `json:"idleSuspended,omitempty"`
 }
 
 type sessionOptions struct {
@@ -333,6 +334,12 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("POST /api/login", s.login)
 	mux.HandleFunc("GET /login", s.loginPage)
 	mux.HandleFunc("GET /public/", s.publicAsset)
+	mux.HandleFunc("GET /manifest.webmanifest", func(writer http.ResponseWriter, request *http.Request) {
+		serveEmbedded(writer, "web/manifest.webmanifest", "application/manifest+json")
+	})
+	mux.Handle("GET /notifications.js", s.requireAuth(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		serveEmbedded(writer, "web/notifications.js", "text/javascript; charset=utf-8")
+	})))
 	mux.Handle("/api/", s.requireAuth(http.HandlerFunc(s.api)))
 	mux.Handle("/assets/", s.requireAuth(http.HandlerFunc(s.asset)))
 	mux.Handle("/", s.requireAuth(http.HandlerFunc(s.index)))
@@ -1570,21 +1577,22 @@ func normalizeSessionDisplayName(value string) (string, error) {
 
 func summarize(session *kelos.Session) sessionSummary {
 	summary := sessionSummary{
-		Name:           session.Name,
-		DisplayName:    sessionDisplayName(session),
-		Namespace:      session.Namespace,
-		UID:            string(session.UID),
-		Provider:       session.Spec.Worker.Type,
-		Model:          session.Status.Model,
-		Phase:          session.Status.Phase,
-		LastActivityAt: session.Status.LastActivityTime,
-		Message:        session.Status.Message,
-		Branch:         session.Status.Branch,
-		PullRequest:    session.Status.PullRequest,
-		Section:        session.Annotations[sessionSectionAnnotation],
-		Resetting:      session.Annotations[sessionreset.RequestAnnotation] != "",
-		UserSuspended:  session.Spec.Suspend != nil && *session.Spec.Suspend,
-		IdleSuspended:  sessionsuspend.IsIdlePolicySuspended(session),
+		Name:             session.Name,
+		DisplayName:      sessionDisplayName(session),
+		Namespace:        session.Namespace,
+		UID:              string(session.UID),
+		Provider:         session.Spec.Worker.Type,
+		Model:            session.Status.Model,
+		Phase:            session.Status.Phase,
+		LastActivityAt:   session.Status.LastActivityTime,
+		LastNotification: session.Status.LastNotification,
+		Message:          session.Status.Message,
+		Branch:           session.Status.Branch,
+		PullRequest:      session.Status.PullRequest,
+		Section:          session.Annotations[sessionSectionAnnotation],
+		Resetting:        session.Annotations[sessionreset.RequestAnnotation] != "",
+		UserSuspended:    session.Spec.Suspend != nil && *session.Spec.Suspend,
+		IdleSuspended:    sessionsuspend.IsIdlePolicySuspended(session),
 	}
 	if !session.CreationTimestamp.IsZero() {
 		createdAt := session.CreationTimestamp

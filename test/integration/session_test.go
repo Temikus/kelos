@@ -1,6 +1,7 @@
 package integration
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -11,6 +12,7 @@ import (
 	. "github.com/onsi/gomega"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -21,6 +23,8 @@ import (
 	kelos "github.com/kelos-dev/kelos/api/v1alpha2"
 	"github.com/kelos-dev/kelos/internal/consoleserver"
 	"github.com/kelos-dev/kelos/internal/controller"
+	"github.com/kelos-dev/kelos/internal/sessionruntime"
+	clientv1alpha2 "github.com/kelos-dev/kelos/pkg/generated/clientset/versioned/typed/api/v1alpha2"
 )
 
 var _ = Describe("Session", func() {
@@ -89,7 +93,7 @@ spec:
 		Expect(session.Labels).To(HaveKeyWithValue("source", "yaml"))
 	})
 
-	It("creates a one-replica StatefulSet and becomes ready with its Pod", func() {
+	It("creates a ready Session and publishes runtime notifications to the console", func() {
 		session := validSession(namespace, "chat", "claude-code")
 		Expect(k8sClient.Create(ctx, session)).To(Succeed())
 		Expect(session.Spec.Suspend).NotTo(BeNil())
@@ -150,6 +154,67 @@ spec:
 			g.Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(session), &current)).To(Succeed())
 			g.Expect(current.Status.Phase).To(Equal(kelos.SessionPhaseReady))
 			g.Expect(current.Status.PodName).To(Equal(pod.Name))
+		}, 10*time.Second, 100*time.Millisecond).Should(Succeed())
+
+		runtimeClient, err := clientv1alpha2.NewForConfig(cfg)
+		Expect(err).NotTo(HaveOccurred())
+		publisher, err := sessionruntime.NewSessionStatusPublisher(runtimeClient.Sessions(namespace), session.Name, pod.UID)
+		Expect(err).NotTo(HaveOccurred())
+		clientset, err := kubernetes.NewForConfig(cfg)
+		Expect(err).NotTo(HaveOccurred())
+		console, err := consoleserver.New(consoleserver.Config{
+			Token: "secret-token", Client: k8sClient, Clientset: clientset, RESTConfig: cfg, DefaultNamespace: namespace,
+		})
+		Expect(err).NotTo(HaveOccurred())
+		journal := sessionruntime.NewJournal()
+		defer journal.Close()
+		for _, event := range []sessionruntime.Event{
+			{Type: sessionruntime.EventInputRequested, InputID: "first"},
+			{Type: sessionruntime.EventInputResolved, InputID: "first"},
+			{Type: sessionruntime.EventTurnCompleted, Status: "completed"},
+			{Type: sessionruntime.EventTurnCompleted, Status: "failed"},
+			{Type: sessionruntime.EventTurnCompleted, Status: "interrupted"},
+		} {
+			timestamp := time.Now().UTC().Truncate(time.Second)
+			event.Timestamp = &timestamp
+			Expect(journal.Append(event)).To(Succeed())
+			notification := journal.LatestNotification()
+			Eventually(func() error {
+				return publisher(ctx, sessionruntime.ObservedSessionStatus{LastNotification: notification})
+			}, 10*time.Second, 100*time.Millisecond).Should(Succeed())
+			request := httptest.NewRequest(http.MethodGet, "/api/sessions?namespace="+namespace, nil)
+			request.Header.Set("Authorization", "Bearer secret-token")
+			response := httptest.NewRecorder()
+			console.ServeHTTP(response, request)
+			Expect(response.Code).To(Equal(http.StatusOK), response.Body.String())
+			var summaries []struct {
+				LastNotification *kelos.SessionNotification `json:"lastNotification"`
+			}
+			Expect(json.Unmarshal(response.Body.Bytes(), &summaries)).To(Succeed())
+			Expect(summaries).To(HaveLen(1))
+			got := summaries[0].LastNotification
+			if notification == nil {
+				Expect(got).To(BeNil())
+			} else {
+				Expect(got).NotTo(BeNil())
+				Expect(got.ID).To(Equal(notification.ID))
+				Expect(got.Type).To(Equal(notification.Type))
+				Expect(got.EventTime.Equal(&notification.EventTime)).To(BeTrue())
+			}
+		}
+	})
+
+	It("rejects an empty notification identity", func() {
+		session := validSession(namespace, "empty-notification-id", "codex")
+		session.Spec.Suspend = ptr.To(true)
+		Expect(k8sClient.Create(ctx, session)).To(Succeed())
+		Eventually(func(g Gomega) {
+			g.Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(session), session)).To(Succeed())
+			session.Status.LastNotification = &kelos.SessionNotification{
+				Type: kelos.SessionNotificationTypeInputRequested, EventTime: metav1.Now(),
+			}
+			err := k8sClient.Status().Update(ctx, session)
+			g.Expect(apierrors.IsInvalid(err)).To(BeTrue(), "expected empty notification ID to fail validation, got %v", err)
 		}, 10*time.Second, 100*time.Millisecond).Should(Succeed())
 	})
 
