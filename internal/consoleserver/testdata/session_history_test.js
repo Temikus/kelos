@@ -324,7 +324,10 @@ global.interruptActiveTurn = () => { interruptRequests++; };
 global.showToast = (message) => { toasts.push(message); };
 global.notifySessions = () => {};
 global.pruneBrowserNotifications = () => {};
+global.pruneCompletionReads = () => {};
 global.closeSessionSectionEditor = () => {};
+
+global.scheduleCompletionRead = () => false;
 
 const application = fs.readFileSync(path.join(__dirname, '..', 'web', 'app.js'), 'utf8');
 

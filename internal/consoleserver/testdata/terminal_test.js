@@ -194,6 +194,7 @@ assert.equal(sockets.at(-1).closed, true);
 
 const index = fs.readFileSync(path.join(__dirname, '../web/index.html'), 'utf8');
 const app = fs.readFileSync(path.join(__dirname, '../web/app.js'), 'utf8');
+global.scheduleCompletionRead = () => {};
 assert.match(index, /id="terminal-tab"[^>]*role="tab"[^>]*aria-controls="terminal-view"[^>]*disabled/);
 assert.match(index, /id="terminal-view"[^>]*role="tabpanel"[^>]*aria-labelledby="terminal-tab"[^>]*hidden/);
 assert.match(app, /terminalTab.addEventListener\('click', \(\) => setActiveView\('terminal'\)\)/);

@@ -1526,6 +1526,9 @@ func (s *Server) handleConnection(ctx context.Context, connection net.Conn) {
 				writerDone <- nil
 				return
 			case event := <-out:
+				if event.ID > 0 && event.Type == EventTurnCompleted && (event.Status == "completed" || event.Status == "failed") {
+					event.NotificationID = s.journal.notificationID(event.ID)
+				}
 				if err := encoder.Encode(event); err != nil {
 					writerDone <- err
 					cancel()

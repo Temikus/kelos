@@ -8,6 +8,10 @@ import (
 	kelos "github.com/kelos-dev/kelos/api/v1alpha2"
 )
 
+func (j *Journal) notificationID(eventID int64) string {
+	return fmt.Sprintf("%s/%d", j.journalID, eventID)
+}
+
 // LatestNotification returns the latest retained event that needs attention.
 func (j *Journal) LatestNotification() *kelos.SessionNotification {
 	j.mu.Lock()
@@ -47,7 +51,7 @@ func (j *Journal) LatestNotification() *kelos.SessionNotification {
 			return nil
 		}
 		return &kelos.SessionNotification{
-			ID:        fmt.Sprintf("%s/%d", j.journalID, event.ID),
+			ID:        j.notificationID(event.ID),
 			Type:      kind,
 			EventTime: metav1.NewTime(*event.Timestamp),
 		}

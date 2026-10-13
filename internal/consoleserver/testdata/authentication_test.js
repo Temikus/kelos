@@ -13,6 +13,7 @@ function slice(start, end) {
 }
 
 const redirects = [];
+global.state = {};
 global.window = {location: {replace: target => redirects.push(target)}};
 vm.runInThisContext(slice('async function api(', 'let toastTimer'), {filename: 'app.js'});
 vm.runInThisContext(slice('async function loadIdentity(', 'async function loadConfig('), {filename: 'app.js'});
@@ -39,6 +40,7 @@ vm.runInThisContext(slice('async function loadIdentity(', 'async function loadCo
       return {status: 200, ok: true, json: async () => ({defaultNamespace: 'team-a', username})};
     };
     await loadIdentity();
+    assert.equal(state.username, username || '');
     assert.equal(requests, 1);
     assert.equal(identity.hidden, !username);
     assert.equal(identity.textContent, username ? `Signed in as ${username}` : '');

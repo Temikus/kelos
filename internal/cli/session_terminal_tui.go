@@ -1108,7 +1108,7 @@ func (m *sessionTUIModel) setPendingUser(turnID, text string, attachments []sess
 }
 
 func (m *sessionTUIModel) acceptPendingTurn(turnID string) bool {
-	if m.pendingTurnID != turnID {
+	if turnID == "" || m.pendingTurnID != turnID {
 		return false
 	}
 	text := m.pendingTurnText
