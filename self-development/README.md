@@ -14,9 +14,10 @@ for the sibling
 [`kelos-dev/open-actions`](https://github.com/kelos-dev/open-actions)
 repository.
 
-[`cs`](cs) creates persistent interactive Claude Code environments for developing
-Kelos with the same Workspace, credentials, model, effort, and Git identity as
-the `kelos-workers` SessionSpawner.
+[`cs`](cs) creates persistent interactive Claude Code environments using `opus`
+and the `CLAUDE_CODE_OAUTH_TOKEN` key in the shared `kelos-credentials` Secret.
+It shares the Workspace, effort, and Git identity with the `kelos-workers`
+SessionSpawner, which uses GPT-6.1 Sol through Codex.
 
 ## How It Works
 
@@ -54,11 +55,11 @@ discovery jobs.
 
 | Spawner | Trigger | Agent | Description |
 |---|---|---|---|
-| **kelos-workers** | Webhook: issue comment `/kelos pick-up` | Claude Opus | Creates a durable Session with the open issue URL and a dedicated issue branch |
+| **kelos-workers** | Webhook: issue comment `/kelos pick-up` | GPT-6.1 Sol | Creates a durable Session with the open issue URL and a dedicated issue branch |
 | **kelos-planner** | Webhook: issue comment `/kelos plan` | Claude Opus | Investigates an issue and posts a structured implementation plan — advisory only, no code changes |
 | **kelos-reviewer** | Webhook: PR comment `/kelos review` | Claude Opus | Reviews PRs on demand — analyzes code, checks conventions, and updates a sticky review comment |
 | **kelos-api-reviewer** | Webhook: issue/PR comment `/kelos api-review` | Claude Opus | Reviews Kubernetes API design on issues or PRs — naming, compatibility, CRD validation |
-| **kelos-pr-responder** | Webhook: PR comment/review `/kelos pick-up` | Claude Opus | Creates a durable Session with the open PR URL on its existing branch |
+| **kelos-pr-responder** | Webhook: PR comment/review `/kelos pick-up` | GPT-6.1 Sol | Creates a durable Session with the open PR URL on its existing branch |
 | **kelos-triage** | Webhook: issue opened/labeled/reopened (`needs-actor`) | Claude Opus | Classifies issues by kind/priority, detects duplicates, and recommends an actor |
 | **kelos-fake-user** | Cron (daily 09:00 UTC) | Claude Sonnet | Tests DX as a new user and maintains one unassigned issue slot for the highest-impact problem found |
 | **kelos-fake-strategist** | Cron (every 12 hours) | Claude Opus | Explores new use cases, integrations, and API ideas while maintaining one unassigned strategic issue slot |
@@ -77,7 +78,7 @@ terminal clients after the initial turn.
 | | |
 |---|---|
 | **Trigger** | GitHub `issue_comment` webhook with an exact `/kelos pick-up` command from `gjkim42` on an open issue |
-| **Agent** | Claude Opus via Claude Code |
+| **Agent** | GPT-6.1 Sol via Codex |
 | **Storage** | 10 GiB persistent volume per created Session |
 
 **Key features:**
@@ -187,7 +188,7 @@ PR URL and asks the agent to find the best way to address it.
 | | |
 |---|---|
 | **Trigger** | GitHub PR comment or review webhook with an exact `/kelos pick-up` command from `gjkim42` on an open PR; review events also exclude drafts |
-| **Agent** | Claude Opus via Claude Code |
+| **Agent** | GPT-6.1 Sol via Codex |
 | **Storage** | 10 GiB persistent volume per created Session |
 
 **Key features:**
@@ -372,8 +373,8 @@ kubectl apply -f self-development/kelos-squash-commits.yaml
 
 ## Interactive Development Session
 
-`cs NAME` creates a persistent Claude Code Session with the same Workspace,
-credentials, model, effort, Git identity, and `base-agent` AgentConfig as
+`cs NAME` creates a persistent Claude Code Session using `opus` with the same
+Workspace, credentials Secret, effort, Git identity, and `base-agent` AgentConfig as
 `kelos-workers`. It does not use the worker's resource requests and limits,
 allowing namespace resource defaults to apply.
 
@@ -503,21 +504,23 @@ retrigger it with a fresh comment or relabel after deployment.
 
 ### 5. Agent Credentials Secret
 
-Create a secret with your agent credentials. Every checked-in spawner runs
-Claude Code with OAuth from this Secret:
+All spawners share the `kelos-credentials` Secret and use OAuth. Workers and
+PR responders use Codex; other agents use Claude Code. Run `codex login`
+locally, then create or update the Secret with both credentials:
 
 ```bash
 kubectl create secret generic kelos-credentials \
-  --from-literal=CLAUDE_CODE_OAUTH_TOKEN=<your-claude-code-oauth-token>
+  --from-literal=CLAUDE_CODE_OAUTH_TOKEN=<your-claude-code-oauth-token> \
+  --from-file=CODEX_AUTH_JSON="$HOME/.codex/auth.json" \
+  --dry-run=client -o yaml | kubectl apply -f -
+kubectl label secret kelos-credentials kelos.dev/codex-oauth-refresh=true --overwrite
 ```
 
-For API-key auth, change the task template credential type to `api-key` and
-create the secret with an Anthropic API key instead:
+The label enables scheduled refresh of `CODEX_AUTH_JSON`; the shared Claude
+credential is preserved.
 
-```bash
-kubectl create secret generic kelos-credentials \
-  --from-literal=ANTHROPIC_API_KEY=<your-anthropic-api-key>
-```
+For API-key auth, change each agent's worker credential type to `api-key` and
+use `CODEX_API_KEY` for Codex or `ANTHROPIC_API_KEY` for Claude Code.
 
 ## Customizing for Your Repository
 
@@ -602,7 +605,8 @@ To adapt these examples for your own repository:
          effort: xhigh
    ```
 
-   The checked-in spawners use `opus` for high-capability tasks and `sonnet`
+   Workers and PR responders use `gpt-6.1-sol` through Codex. The other
+   spawners use Claude Code with `opus` for high-capability tasks and `sonnet`
    for lower-cost routine tasks.
    They set `effort` by role: `xhigh` for complex planning, coding, strategy,
    review, PR update, and configuration update workflows; `high` for triage;
