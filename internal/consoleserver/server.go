@@ -128,25 +128,26 @@ func (c *sessionSocket) WriteMessage(messageType int, data []byte) error {
 }
 
 type sessionSummary struct {
-	Name             string                     `json:"name"`
-	DisplayName      string                     `json:"displayName"`
-	Namespace        string                     `json:"namespace"`
-	UID              string                     `json:"uid,omitempty"`
-	Provider         string                     `json:"provider"`
-	Model            string                     `json:"model,omitempty"`
-	Phase            kelos.SessionPhase         `json:"phase,omitempty"`
-	Active           *bool                      `json:"active,omitempty"`
-	WaitingForInput  bool                       `json:"waitingForInput,omitempty"`
-	CreatedAt        *metav1.Time               `json:"createdAt,omitempty"`
-	LastActivityAt   *metav1.Time               `json:"lastActivityAt,omitempty"`
-	LastNotification *kelos.SessionNotification `json:"lastNotification,omitempty"`
-	Message          string                     `json:"message,omitempty"`
-	Branch           string                     `json:"branch,omitempty"`
-	PullRequest      *kelos.SessionPullRequest  `json:"pullRequest,omitempty"`
-	Section          string                     `json:"section,omitempty"`
-	Resetting        bool                       `json:"resetting,omitempty"`
-	UserSuspended    bool                       `json:"userSuspended,omitempty"`
-	IdleSuspended    bool                       `json:"idleSuspended,omitempty"`
+	Name               string                     `json:"name"`
+	DisplayName        string                     `json:"displayName"`
+	Namespace          string                     `json:"namespace"`
+	UID                string                     `json:"uid,omitempty"`
+	Provider           string                     `json:"provider"`
+	Model              string                     `json:"model,omitempty"`
+	Phase              kelos.SessionPhase         `json:"phase,omitempty"`
+	Active             *bool                      `json:"active,omitempty"`
+	WaitingForInput    bool                       `json:"waitingForInput,omitempty"`
+	CreatedAt          *metav1.Time               `json:"createdAt,omitempty"`
+	LastActivityAt     *metav1.Time               `json:"lastActivityAt,omitempty"`
+	LastNotification   *kelos.SessionNotification `json:"lastNotification,omitempty"`
+	ReadNotificationID string                     `json:"readNotificationId,omitempty"`
+	Message            string                     `json:"message,omitempty"`
+	Branch             string                     `json:"branch,omitempty"`
+	PullRequest        *kelos.SessionPullRequest  `json:"pullRequest,omitempty"`
+	Section            string                     `json:"section,omitempty"`
+	Resetting          bool                       `json:"resetting,omitempty"`
+	UserSuspended      bool                       `json:"userSuspended,omitempty"`
+	IdleSuspended      bool                       `json:"idleSuspended,omitempty"`
 }
 
 type sessionOptions struct {
@@ -513,6 +514,10 @@ func (s *Server) api(writer http.ResponseWriter, request *http.Request) {
 	}
 	if len(parts) == 4 && parts[3] == "resume" && request.Method == http.MethodPost {
 		s.resumeSession(writer, request, namespace, name)
+		return
+	}
+	if len(parts) == 4 && parts[3] == "read" && request.Method == http.MethodPost {
+		s.readSessionCompletion(writer, request, namespace, name)
 		return
 	}
 	if len(parts) == 4 && parts[3] == "section" && request.Method == http.MethodPatch {
@@ -1080,7 +1085,7 @@ func (s *Server) listSessions(writer http.ResponseWriter, request *http.Request)
 	})
 	items := make([]sessionSummary, 0, len(list.Items))
 	for i := range list.Items {
-		items = append(items, summarize(&list.Items[i]))
+		items = append(items, summarizeForUser(request, &list.Items[i]))
 	}
 	writeJSON(writer, http.StatusOK, items)
 }
@@ -1237,7 +1242,7 @@ func (s *Server) createSession(writer http.ResponseWriter, request *http.Request
 		writeError(writer, status, fmt.Sprintf("creating Session %q: %v", payload.Name, err))
 		return
 	}
-	writeJSON(writer, http.StatusCreated, summarize(session))
+	writeJSON(writer, http.StatusCreated, summarizeForUser(request, session))
 }
 
 func (s *Server) applySession(writer http.ResponseWriter, request *http.Request) {
@@ -1300,7 +1305,7 @@ func (s *Server) applySession(writer http.ResponseWriter, request *http.Request)
 		writeKubernetesError(writer, fmt.Sprintf("getting applied Session %q", session.Name), err)
 		return
 	}
-	writeJSON(writer, http.StatusOK, summarize(&applied))
+	writeJSON(writer, http.StatusOK, summarizeForUser(request, &applied))
 }
 
 func (s *Server) deleteSession(writer http.ResponseWriter, request *http.Request, namespace, name string) {
@@ -1338,7 +1343,7 @@ func (s *Server) resetSession(writer http.ResponseWriter, request *http.Request,
 		writeError(writer, status, err.Error())
 		return
 	}
-	writeJSON(writer, http.StatusAccepted, summarize(session))
+	writeJSON(writer, http.StatusAccepted, summarizeForUser(request, session))
 }
 
 func (s *Server) suspendSession(writer http.ResponseWriter, request *http.Request, namespace, name string) {
@@ -1351,7 +1356,7 @@ func (s *Server) suspendSession(writer http.ResponseWriter, request *http.Reques
 		return
 	}
 	if session.Spec.Suspend != nil && *session.Spec.Suspend {
-		writeJSON(writer, http.StatusAccepted, summarize(&session))
+		writeJSON(writer, http.StatusAccepted, summarizeForUser(request, &session))
 		return
 	}
 
@@ -1377,7 +1382,7 @@ func (s *Server) suspendSession(writer http.ResponseWriter, request *http.Reques
 		writeError(writer, status, fmt.Sprintf("suspending Session %q: %v", name, err))
 		return
 	}
-	writeJSON(writer, http.StatusAccepted, summarize(&session))
+	writeJSON(writer, http.StatusAccepted, summarizeForUser(request, &session))
 }
 
 func (s *Server) resumeSession(writer http.ResponseWriter, request *http.Request, namespace, name string) {
@@ -1444,7 +1449,7 @@ func (s *Server) resumeSession(writer http.ResponseWriter, request *http.Request
 			return
 		}
 	}
-	writeJSON(writer, http.StatusAccepted, summarize(session))
+	writeJSON(writer, http.StatusAccepted, summarizeForUser(request, session))
 }
 
 func (s *Server) updateSessionSection(writer http.ResponseWriter, request *http.Request, namespace, name string) {
@@ -1495,7 +1500,7 @@ func (s *Server) updateSessionSection(writer http.ResponseWriter, request *http.
 		writeError(writer, status, fmt.Sprintf("updating section for Session %q: %v", name, err))
 		return
 	}
-	writeJSON(writer, http.StatusOK, summarize(&session))
+	writeJSON(writer, http.StatusOK, summarizeForUser(request, &session))
 }
 
 func normalizeSessionSection(value string) (string, error) {
@@ -1559,7 +1564,7 @@ func (s *Server) updateSessionDisplayName(writer http.ResponseWriter, request *h
 		writeError(writer, status, fmt.Sprintf("updating display name for Session %q: %v", name, err))
 		return
 	}
-	writeJSON(writer, http.StatusOK, summarize(&session))
+	writeJSON(writer, http.StatusOK, summarizeForUser(request, &session))
 }
 
 func normalizeSessionDisplayName(value string) (string, error) {

@@ -19,7 +19,7 @@ function applicationSlice(start, end) {
 vm.runInThisContext(applicationSlice('function errorMessage', 'function requireElements'), {filename: 'app.js'});
 vm.runInThisContext(applicationSlice('const allResourceKind', 'async function loadResources'), {filename: 'app.js'});
 vm.runInThisContext(applicationSlice('async function refreshConsole', 'async function openResourceDetail'), {filename: 'app.js'});
-vm.runInThisContext(applicationSlice('function setResourceDetailView', 'const completionReadPrefix'), {filename: 'app.js'});
+vm.runInThisContext(applicationSlice('function setResourceDetailView', 'const pendingCompletionReads'), {filename: 'app.js'});
 
 vm.runInThisContext(applicationSlice('function renderSessions(', 'function createSessionListItem('), {filename: 'app.js'});
 
