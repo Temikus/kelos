@@ -14,6 +14,9 @@
 {{- end -}}
 {{- end -}}
 {{- $provider := get $auth $auth.mode | default dict -}}
+{{- if and (eq $auth.mode "github") $provider.team (not $provider.org) -}}
+{{- fail "consoleServer.auth.github.team requires org" -}}
+{{- end -}}
 {{- range $key := list "clientID" "redirectURL" "secretName" "usernamePrefix" "groupsPrefix" -}}
 {{- $_ := required (printf "consoleServer.auth.%s.%s is required" $auth.mode $key) (get $provider $key) -}}
 {{- end -}}
@@ -98,6 +101,9 @@ providers:
     {{- if $provider.org }}
     githubConfig:
       org: {{ $provider.org | quote }}
+      {{- if $provider.team }}
+      team: {{ $provider.team | quote }}
+      {{- end }}
     {{- end }}
     {{- if $provider.caSecretName }}
     caFiles:

@@ -810,6 +810,13 @@ are renamed or removed; use OIDC with stable subjects if immutable per-user
 identity is required. GitHub groups contain organization names and `org:team-slug`
 values. Choose distinct identity prefixes for each provider and GHES instance.
 Groups receive their own prefix. The IdP must supply comma-free group identifiers.
+Kelos accepts at most 1024 groups, 256 bytes per group, and 65536 bytes (64 KiB)
+in the comma-separated group header before prefixing; exceeding these limits
+returns 401 without truncating groups. In GitHub mode,
+`consoleServer.auth.github.org` restricts sign-in to an organization. Adding
+`consoleServer.auth.github.team` restricts sign-in to a single team slug within
+that organization; `team` requires `org`. These sign-in restrictions do not
+filter RBAC groups or grant permissions.
 Only the managed loopback proxy may provide identities. Static tokens and static
 cookies cannot authenticate requests in OIDC or GitHub mode.
 

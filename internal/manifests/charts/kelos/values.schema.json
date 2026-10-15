@@ -80,6 +80,11 @@
             "github": {
               "type": "object",
               "additionalProperties": false,
+              "dependencies": {
+                "team": [
+                  "org"
+                ]
+              },
               "properties": {
                 "clientID": {
                   "type": "string",
@@ -130,6 +135,11 @@
                 "org": {
                   "type": "string",
                   "minLength": 1
+                },
+                "team": {
+                  "type": "string",
+                  "description": "Restrict sign-in to this team slug within org. Requires org.",
+                  "pattern": "^[^\\s,:/]+$"
                 },
                 "caSecretName": {
                   "type": "string",
