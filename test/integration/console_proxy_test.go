@@ -358,6 +358,30 @@ func testConsoleProxy(t *testing.T, mode, githubTeam string) {
 	if session.Spec.Suspend != nil && *session.Spec.Suspend {
 		t.Fatal("resume was not applied")
 	}
+	session.Status.LastNotification = &kelos.SessionNotification{
+		ID: "journal/1", Type: kelos.SessionNotificationTypeTurnCompleted, EventTime: metav1.Now(),
+	}
+	if err := kube.Status().Update(ctx, &session); err != nil {
+		t.Fatal(err)
+	}
+	readBody := fmt.Sprintf(`{"uid":%q,"notificationId":"journal/1"}`, session.UID)
+	if status, body := request(alice, "POST", "/api/sessions/team-a/chat/read", readBody, false); status != 200 {
+		t.Fatalf("read completion = %d %s", status, body)
+	}
+	if status, body := request(bob, "POST", "/api/sessions/team-a/chat/read", readBody, true); status != 403 {
+		t.Fatalf("unauthorized read completion = %d %s", status, body)
+	}
+	otherBrowser := newBrowser()
+	issuer.setIdentity("alice", "developers-a")
+	if status, body := request(otherBrowser, "GET", "/oauth2/start?rd=/", "", false); status != 200 {
+		t.Fatalf("second browser login = %d %s", status, body)
+	}
+	if status, body := request(otherBrowser, "GET", "/api/sessions?namespace=team-a", "", false); status != 200 || !strings.Contains(body, `"readNotificationId":"journal/1"`) {
+		t.Fatalf("shared completion receipt = %d %s", status, body)
+	}
+	if err := kube.Get(ctx, client.ObjectKeyFromObject(&session), &session); err != nil {
+		t.Fatal(err)
+	}
 	session.Status.Phase = kelos.SessionPhaseReady
 	session.Status.PodName = "chat-pod"
 	if err := kube.Status().Update(ctx, &session); err != nil {

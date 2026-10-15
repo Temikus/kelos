@@ -35,44 +35,45 @@ class Node {
   }
 }
 
-function harness(storage = new Map()) {
+function harness(receipts = new Map()) {
   const frames = [];
+  const requests = [];
   let renders = 0;
   const context = vm.createContext({
     document: {
-      visibilityState: 'visible',
-      hasFocus: () => true,
-      querySelector: () => null,
-      createElement: () => new Node(),
+      visibilityState: 'visible', hasFocus: () => true,
+      querySelector: () => null, createElement: () => new Node(),
     },
-    window: {
-      localStorage: {
-        get length() { return storage.size; },
-        key: index => [...storage.keys()][index] ?? null,
-        getItem: key => storage.get(key) ?? null,
-        setItem: (key, value) => storage.set(key, value),
-        removeItem: key => storage.delete(key),
-      },
-      requestAnimationFrame: callback => frames.push(callback),
-    },
+    window: {requestAnimationFrame: callback => frames.push(callback)},
     elements: {
       messages: new Node(), sidebar: new Node(), sessionsUnreadCount: new Node(), sessionsButton: new Node(),
     },
     state: {
-      username: 'alice', namespace: 'default', consoleView: 'sessions',
-      sessions: [], selected: null, currentView: {historyLoaded: true},
-      sectionAssignments: new Set(),
+      namespace: 'default', namespaceGeneration: 0, sessionListGeneration: 0, consoleView: 'sessions',
+      sessions: [], selected: null, currentView: {historyLoaded: true}, sectionAssignments: new Set(),
+    },
+    api: async (url, options) => {
+      requests.push({url, ...options});
+      const payload = JSON.parse(options.body);
+      receipts.set(payload.uid, payload.notificationId);
     },
     renderSessions: () => { renders++; },
-    sessionDisplayStatus: () => 'Idle',
-    createSessionTimestamp: () => new Node(),
-    providerLabel: provider => provider,
-    createPullRequestLink: () => null,
+    sessionDisplayStatus: () => 'Idle', createSessionTimestamp: () => new Node(),
+    providerLabel: provider => provider, createPullRequestLink: () => null,
   });
-  vm.runInContext(slice('const completionReadPrefix', 'function moveChildren'), context);
+  vm.runInContext(slice('const pendingCompletionReads', 'function moveChildren'), context);
   vm.runInContext(slice('function viewingSession', 'function notifySessions'), context);
   vm.runInContext(slice('function createSessionListItem', 'function sessionActionsTarget'), context);
-  return Object.assign(context, {storage, renders: () => renders, flush: () => frames.splice(0).forEach(callback => callback())});
+  return Object.assign(context, {
+    receipts, requests, renders: () => renders,
+    flush: () => frames.splice(0).forEach(callback => callback()),
+    refresh: session => {
+      const current = {...session, readNotificationId: receipts.get(session.uid)};
+      context.state.sessions = [current];
+      context.syncCompletionReads([current]);
+      return current;
+    },
+  });
 }
 
 function completion(id = 'result-1', type = 'TurnCompleted', overrides = {}) {
@@ -92,6 +93,8 @@ function showResult(h, session, id = session.lastNotification.id) {
   h.elements.messages.children = [divider];
   return divider;
 }
+
+(async () => {
 
 {
   const h = harness();
@@ -139,8 +142,9 @@ for (const [name, hide] of [
   const divider = showResult(h, session);
   hide(h, divider);
   h.markVisibleCompletionRead();
+  await new Promise(setImmediate);
   assert.equal(h.hasUnreadCompletion(session), true, name);
-  assert.equal(h.storage.has(h.completionReadKey(session, session.lastNotification.id)), false, name);
+  assert.equal(h.requests.length, 0, name);
 }
 
 {
@@ -150,40 +154,70 @@ for (const [name, hide] of [
   h.scheduleCompletionRead();
   h.scheduleCompletionRead();
   h.flush();
+  assert.equal(h.hasUnreadCompletion(session), true, 'marker waits for the server');
+  h.markVisibleCompletionRead();
+  assert.equal(h.requests.length, 1, 'concurrent reads are coalesced');
+  assert.equal(h.requests[0].url, '/api/sessions/default/session/read');
+  assert.equal(h.requests[0].method, 'POST');
+  assert.deepEqual(JSON.parse(h.requests[0].body), {uid: 'uid-1', notificationId: 'result-1'});
+  await new Promise(setImmediate);
   assert.equal(h.hasUnreadCompletion(session), false);
   assert.equal(h.renders(), 1);
+  assert.equal(h.state.sessionListGeneration, 1, 'responses to earlier list requests are invalidated');
   assert.equal(h.createSessionListItem(session).querySelectorAll('.session-unread-label').length, 0);
-  assert.equal(harness(h.storage).hasUnreadCompletion(session), false, 'refresh retains receipt');
-  assert.equal(h.hasUnreadCompletion(completion('result-2')), true, 'next result is unread');
-  assert.equal(h.hasUnreadCompletion(completion('result-1', 'TurnCompleted', {uid: 'uid-2'})), true, 'recreated Session is unread');
-  assert.equal(h.hasUnreadCompletion(completion('result-1', 'TurnCompleted', {namespace: 'other'})), true, 'namespace is isolated');
-  h.state.username = 'bob';
-  assert.equal(h.hasUnreadCompletion(session), true, 'users have separate receipts');
-  h.state.username = 'alice';
-  h.storage.clear();
-  h.syncCompletionRead({key: null});
-  assert.equal(h.hasUnreadCompletion(session), true, 'storage clear removes receipts');
+  const otherBrowser = harness(h.receipts);
+  assert.equal(otherBrowser.hasUnreadCompletion(otherBrowser.refresh(completion())), false, 'independent browser receives shared receipt');
+  assert.equal(otherBrowser.hasUnreadCompletion(otherBrowser.refresh(completion('result-2'))), true, 'next result is unread');
+  assert.equal(otherBrowser.hasUnreadCompletion(otherBrowser.refresh(completion('result-1', 'TurnCompleted', {uid: 'uid-2'}))), true, 'recreated Session is unread');
 }
 
-{
+for (const status of [undefined, 409, 429, 500, 503]) {
   const h = harness();
   const session = completion();
   showResult(h, session);
-  const otherTab = harness(h.storage);
-  const newer = completion('result-2');
-  showResult(otherTab, newer);
-  otherTab.markVisibleCompletionRead();
+  const send = h.api;
+  h.api = async () => { throw Object.assign(new Error('Temporary failure'), {status}); };
   h.markVisibleCompletionRead();
-  assert.equal(h.storage.size, 2, 'stale tab writes its first receipt without overwriting the newer one');
-  assert.equal(h.hasUnreadCompletion(newer), false);
-  const rendered = h.renders();
-  h.syncCompletionRead({key: h.completionReadKey(newer, newer.lastNotification.id)});
-  assert.equal(h.renders(), rendered + 1, 'storage event refreshes the sidebar');
-  h.storage.delete(h.completionReadKey(session, session.lastNotification.id));
-  assert.equal(h.hasUnreadCompletion(session), false, 'in-memory receipt remains until the storage event arrives');
-  h.syncCompletionRead({key: h.completionReadKey(session, session.lastNotification.id)});
-  assert.equal(h.hasUnreadCompletion(session), true, 'storage event invalidates the in-memory receipt');
-  assert.equal(h.renders(), rendered + 2);
+  await new Promise(setImmediate);
+  assert.equal(h.hasUnreadCompletion(session), true, 'failed save keeps the marker');
+  h.api = send;
+  h.syncCompletionReads([session]);
+  await new Promise(setImmediate);
+  assert.equal(h.hasUnreadCompletion(session), false, 'refresh retries the pending acknowledgment');
+}
+
+for (const status of [400, 403, 404]) {
+  const h = harness();
+  const session = completion();
+  showResult(h, session);
+  let attempts = 0;
+  h.api = async () => {
+    attempts++;
+    throw Object.assign(new Error('Request rejected'), {status});
+  };
+  h.markVisibleCompletionRead();
+  await new Promise(setImmediate);
+  assert.equal(attempts, 1);
+  assert.equal(h.hasUnreadCompletion(session), true, 'rejection must not create a local-only receipt');
+  for (let i = 0; i < 3; i++) {
+    h.syncCompletionReads([session]);
+    h.scheduleCompletionRead();
+    h.flush();
+    await new Promise(setImmediate);
+  }
+  assert.equal(attempts, 1, `${status} is not retried by polling or visibility events`);
+  const later = completion('result-2');
+  showResult(h, later);
+  h.markVisibleCompletionRead();
+  await new Promise(setImmediate);
+  assert.equal(attempts, 2, 'a different result can be acknowledged');
+  h.receipts.set(session.uid, later.lastNotification.id);
+  assert.equal(h.hasUnreadCompletion(h.refresh(later)), false, 'another browser can still acknowledge a rejected result');
+  const reloaded = harness();
+  showResult(reloaded, session);
+  reloaded.markVisibleCompletionRead();
+  await new Promise(setImmediate);
+  assert.equal(reloaded.hasUnreadCompletion(session), false, 'page reload allows retrying after access is restored');
 }
 
 {
@@ -194,53 +228,11 @@ for (const [name, hide] of [
   h.elements.messages.children = [older, latest];
   latest.bounds = {top: 700, bottom: 710, height: 10};
   h.markVisibleCompletionRead();
-  assert.equal(h.storage.size, 0, 'scrolling older results does not create receipts');
+  assert.equal(h.requests.length, 0, 'scrolling older results does not acknowledge them');
   latest.bounds = {top: 400, bottom: 410, height: 10};
-  const olderKey = h.completionReadKey(session, 'older-result');
-  h.storage.set(olderKey, '1');
-  const futureKey = h.completionReadKey(session, 'future-result');
-  h.storage.set(futureKey, '1');
   h.markVisibleCompletionRead();
+  await new Promise(setImmediate);
   assert.equal(h.hasUnreadCompletion(session), false);
-  assert.equal(h.storage.has(olderKey), false, 'known older receipt is pruned');
-  assert.equal(h.storage.has(futureKey), true, 'unknown later receipt from another tab survives pruning');
-}
-
-{
-  const h = harness();
-  const session = completion();
-  const older = showResult(h, session);
-  h.markVisibleCompletionRead();
-  const latest = showResult(h, session, 'live-result');
-  h.elements.messages.children = [older, latest];
-  h.markVisibleCompletionRead();
-  assert.equal(h.hasUnreadCompletion(session), false, 'list refresh lag does not restore the older unread marker');
-  h.state.selected = completion('live-result');
-  h.markVisibleCompletionRead();
-  assert.equal(h.storage.size, 1, 'superseded receipt is pruned once the list catches up');
-}
-
-{
-  const h = harness();
-  const session = completion();
-  showResult(h, session);
-  h.markVisibleCompletionRead();
-  const key = h.completionReadKey(session, session.lastNotification.id);
-  const otherNamespace = h.completionReadKey({...session, namespace: 'other'}, session.lastNotification.id);
-  h.state.username = 'bob';
-  const otherUser = h.completionReadKey(session, session.lastNotification.id);
-  h.state.username = 'alice';
-  for (const key of [otherNamespace, otherUser, 'kelos-console-namespace']) h.storage.set(key, '1');
-  h.pruneCompletionReads([session]);
-  assert.equal(h.storage.has(key), true, 'current Session receipt is retained');
-  h.pruneCompletionReads([{...session, uid: 'replacement'}]);
-  assert.equal(h.storage.has(key), false, 'replaced Session receipt is pruned');
-  assert.equal(h.hasUnreadCompletion(session), true, 'pruning removes in-memory state too');
-  for (const key of [otherNamespace, otherUser, 'kelos-console-namespace']) assert.equal(h.storage.has(key), true);
-  showResult(h, session);
-  h.markVisibleCompletionRead();
-  h.pruneCompletionReads([]);
-  assert.equal(h.storage.has(key), false, 'removed Session receipt is pruned');
 }
 
 {
@@ -248,21 +240,39 @@ for (const [name, hide] of [
   const session = completion();
   showResult(h, session, 'live-result');
   h.markVisibleCompletionRead();
-  assert.equal(h.hasUnreadCompletion(completion('live-result')), false, 'visible live result is read before the Session list catches up');
-  assert.equal(h.hasUnreadCompletion(session), true, 'a different result remains unread');
+  assert.equal(h.requests.length, 0, 'wait for the live result to be published');
+  h.state.selected = null;
+  const current = h.refresh(completion('live-result'));
+  await new Promise(setImmediate);
+  assert.equal(h.hasUnreadCompletion(current), false, 'a result seen before polling is remembered even after leaving the conversation');
+  assert.equal(h.hasUnreadCompletion(session), true, 'another result remains unread');
+}
+
+for (const change of [
+  () => completion('result-2'),
+  () => completion('result-1', 'TurnCompleted', {uid: 'replacement'}),
+]) {
+  const h = harness();
+  const session = completion();
+  showResult(h, session);
+  let finish;
+  h.api = () => new Promise(resolve => { finish = resolve; });
+  h.markVisibleCompletionRead();
+  const current = change();
+  showResult(h, current);
+  finish();
+  await new Promise(setImmediate);
+  assert.equal(h.hasUnreadCompletion(current), true, 'a delayed acknowledgment cannot clear a different result or Session');
 }
 
 {
   const h = harness();
-  h.window.localStorage = {
-    getItem() { throw new Error('Storage blocked'); },
-    setItem() { throw new Error('Storage blocked'); },
-  };
-  const session = completion();
-  showResult(h, session);
+  showResult(h, completion(), 'live-result');
   h.markVisibleCompletionRead();
-  assert.equal(h.hasUnreadCompletion(session), false, 'receipt survives in this tab when storage is blocked');
-  assert.equal(h.hasUnreadCompletion(completion('later')), true);
+  h.syncCompletionReads([]);
+  h.refresh(completion('live-result'));
+  assert.equal(h.requests.length, 0, 'removed Sessions lose pending read intents');
 }
 
 console.log('Unread completion tests passed');
+})().catch(error => { console.error(error); process.exitCode = 1; });

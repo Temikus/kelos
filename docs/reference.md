@@ -689,10 +689,13 @@ visible in the focused **Conversation** view. The **Sessions** navigation item
 counts unread results in the active namespace. These markers track the latest
 retained notification for each Session, independently of browser notifications;
 input requests and interrupted turns do not receive an unread completion marker.
-Read receipts persist in this browser and synchronize across its tabs. They are
-separate for each signed-in username; token authentication shares the browser's
-read state. Clearing browser storage clears the receipts. If storage is
-unavailable, receipts last only for the current tab. They do not sync across devices.
+Read state is shared across browsers and devices for the same signed-in username.
+With token authentication, all users share the read state. Other browsers pick up
+acknowledgments on the next Session refresh, normally within five seconds. Clearing
+browser storage does not restore unread markers. If saving an acknowledgment
+fails, the marker stays unread. Temporary failures retry on a later Session
+refresh; rejected requests (invalid request, access denied, or Session not found)
+stop retrying for that result until the page is reloaded.
 Open **Settings** using the gear icon in the sidebar footer, then enable
 **Browser notifications** to opt in. The Settings popover also shows permission
 or browser-support guidance when needed. Press Escape or click outside to close it.
@@ -838,6 +841,7 @@ namespace. Named reads and actions are checked against the exact resource name.
 | Read or clone a Session source | `get sessions` |
 | Create a Session | `create sessions` |
 | Apply Session YAML | `get sessions`, `patch sessions`, and `create sessions` |
+| Mark a result read | `get sessions` and `patch sessions` |
 | Set section or display name | `get sessions` and `patch sessions` |
 | Delete a Session | `delete sessions` |
 | Reset a Session | `get sessions` and `create sessions/reset` |

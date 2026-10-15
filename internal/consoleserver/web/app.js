@@ -186,7 +186,6 @@
         toast: document.querySelector('#toast'),
     });
     const state = {
-        username: '',
         sessions: [],
         selected: null,
         socket: null,
@@ -288,11 +287,11 @@
         });
         if (response.status === 401) {
             window.location.replace('/login');
-            throw new Error('Authentication required');
+            throw Object.assign(new Error('Authentication required'), { status: response.status });
         }
         if (!response.ok) {
             const body = await response.json().catch(() => ({}));
-            throw new Error(body.error || `${response.status} ${response.statusText}`);
+            throw Object.assign(new Error(body.error || `${response.status} ${response.statusText}`), { status: response.status });
         }
         if (response.status === 204)
             return undefined;
@@ -1576,59 +1575,69 @@ ${specs[collection.resource]}`;
         const logsRequest = showTaskLogs ? loadResourceTaskLogs(state.resourceDetailTask, generation) : Promise.resolve();
         await Promise.all([manifestRequest, logsRequest]);
     }
-    const completionReadPrefix = 'kelos-console-completion-read:';
-    const readCompletions = new Set();
+    const pendingCompletionReads = new Map();
+    const rejectedCompletionReads = new Map();
+    const completionReadsInFlight = new Set();
     let completionReadFrame = null;
-    function completionReadKey(session, notificationID) {
-        return completionReadPrefix + JSON.stringify([state.username, sessionViewKey(session), notificationID]);
-    }
-    function completionWasRead(key) {
-        if (readCompletions.has(key))
-            return true;
-        try {
-            return window.localStorage.getItem(key) === '1';
-        }
-        catch {
-            return false;
-        }
-    }
-    function forgetCompletionRead(key) {
-        readCompletions.delete(key);
-        try {
-            window.localStorage.removeItem(key);
-        }
-        catch { }
-    }
-    function pruneCompletionReads(sessions) {
-        const current = new Set(sessions.map(sessionViewKey));
-        const keys = new Set(readCompletions);
-        try {
-            for (let index = 0; index < window.localStorage.length; index++) {
-                const key = window.localStorage.key(index);
-                if (key?.startsWith(completionReadPrefix))
-                    keys.add(key);
-            }
-        }
-        catch { }
-        for (const key of keys) {
-            let username;
-            let session;
-            try {
-                [username, session] = JSON.parse(key.slice(completionReadPrefix.length));
-            }
-            catch {
-                continue;
-            }
-            if (username !== state.username || typeof session !== 'string'
-                || !session.startsWith(`${state.namespace}/`) || current.has(session))
-                continue;
-            forgetCompletionRead(key);
-        }
-    }
     function hasUnreadCompletion(session) {
         const notification = session.lastNotification;
         return !session.resetting && notification && ['TurnCompleted', 'TurnFailed'].includes(notification.type)
-            ? !completionWasRead(completionReadKey(session, notification.id)) : false;
+            ? session.readNotificationId !== notification.id : false;
+    }
+    function syncCompletionReads(sessions) {
+        const current = new Set(sessions.map(sessionViewKey));
+        for (const reads of [pendingCompletionReads, rejectedCompletionReads]) {
+            for (const key of reads.keys()) {
+                if (key.startsWith(`${state.namespace}/`) && !current.has(key))
+                    reads.delete(key);
+            }
+        }
+        for (const session of sessions) {
+            const key = sessionViewKey(session);
+            const id = pendingCompletionReads.get(key);
+            if (!id || session.resetting || session.lastNotification?.id !== id
+                || rejectedCompletionReads.get(key) === id || completionReadsInFlight.has(key))
+                continue;
+            if (session.readNotificationId === id) {
+                pendingCompletionReads.delete(key);
+                continue;
+            }
+            void saveCompletionRead(session, id);
+        }
+    }
+    async function saveCompletionRead(session, notificationID) {
+        const key = sessionViewKey(session);
+        const generation = state.namespaceGeneration;
+        completionReadsInFlight.add(key);
+        try {
+            await api(`/api/sessions/${encodeURIComponent(session.namespace)}/${encodeURIComponent(session.name)}/read`, {
+                method: 'POST', body: JSON.stringify({ uid: session.uid, notificationId: notificationID }),
+            });
+            if (pendingCompletionReads.get(key) === notificationID)
+                pendingCompletionReads.delete(key);
+            if (generation !== state.namespaceGeneration)
+                return;
+            // A list requested before the acknowledgment may still contain the unread state.
+            state.sessionListGeneration++;
+            for (const current of [...state.sessions, ...(state.selected ? [state.selected] : [])]) {
+                if (sessionViewKey(current) === key && current.lastNotification?.id === notificationID) {
+                    current.readNotificationId = notificationID;
+                }
+            }
+            renderSessions();
+        }
+        catch (error) {
+            const status = error?.status;
+            if (status && [400, 403, 404].includes(status)) {
+                rejectedCompletionReads.set(key, notificationID);
+                if (pendingCompletionReads.get(key) === notificationID)
+                    pendingCompletionReads.delete(key);
+            }
+            // Transient failures remain pending for the next Session refresh.
+        }
+        finally {
+            completionReadsInFlight.delete(key);
+        }
     }
     function renderUnreadCount() {
         const count = state.sessions.filter(hasUnreadCompletion).length;
@@ -1648,28 +1657,15 @@ ${specs[collection.resource]}`;
         const divider = dividers.at(-1);
         if (!divider)
             return;
-        const key = completionReadKey(session, divider.dataset.notificationId);
-        if (!completionWasRead(key)) {
-            const viewport = elements.messages.getBoundingClientRect();
-            const bounds = divider.getBoundingClientRect();
-            if (bounds.height <= 0 || bounds.bottom <= viewport.top || bounds.top >= viewport.bottom)
-                return;
-            readCompletions.add(key);
-            try {
-                // Each result has its own receipt so a stale tab cannot overwrite a newer read.
-                window.localStorage.setItem(key, '1');
-            }
-            catch {
-                // Reading still works for this tab when browser storage is unavailable.
-            }
-            renderSessions();
-        }
-        // Only discard results known to precede this one; another tab may have read a later result.
-        for (const older of dividers.slice(0, -1)) {
-            const id = older.dataset.notificationId;
-            if (id !== session.lastNotification?.id)
-                forgetCompletionRead(completionReadKey(session, id));
-        }
+        const id = divider.dataset.notificationId;
+        if (session.readNotificationId === id || rejectedCompletionReads.get(sessionViewKey(session)) === id)
+            return;
+        const viewport = elements.messages.getBoundingClientRect();
+        const bounds = divider.getBoundingClientRect();
+        if (bounds.height <= 0 || bounds.bottom <= viewport.top || bounds.top >= viewport.bottom)
+            return;
+        pendingCompletionReads.set(sessionViewKey(session), id);
+        syncCompletionReads(state.sessions);
     }
     function scheduleCompletionRead() {
         if (completionReadFrame !== null)
@@ -1678,15 +1674,6 @@ ${specs[collection.resource]}`;
             completionReadFrame = null;
             markVisibleCompletionRead();
         });
-    }
-    function syncCompletionRead(event) {
-        if (event.key !== null && !event.key.startsWith(completionReadPrefix))
-            return;
-        if (event.key === null)
-            readCompletions.clear();
-        else
-            readCompletions.delete(event.key);
-        renderSessions();
     }
     function sessionKey(session) {
         return `${session.namespace}/${session.name}`;
@@ -2763,7 +2750,7 @@ ${specs[collection.resource]}`;
             if (generation !== state.namespaceGeneration || listGeneration !== state.sessionListGeneration)
                 return;
             state.sessions = sessions;
-            pruneCompletionReads(sessions);
+            syncCompletionReads(sessions);
             pruneBrowserNotifications(sessions);
             notifySessions(sessions);
             renderSectionOptions();
@@ -2804,7 +2791,6 @@ ${specs[collection.resource]}`;
     }
     async function loadIdentity() {
         const config = await api('/api/config');
-        state.username = config.username || '';
         const identity = requiredElement('#console-identity');
         identity.hidden = !config.username;
         identity.textContent = config.username ? `Signed in as ${config.username}` : '';
@@ -6469,7 +6455,6 @@ spec:
     window.addEventListener('focus', scheduleCompletionRead);
     window.addEventListener('resize', scheduleCompletionRead);
     document.addEventListener('visibilitychange', scheduleCompletionRead);
-    window.addEventListener('storage', syncCompletionRead);
     navigator.serviceWorker?.addEventListener('message', event => {
         if (event.data?.type === 'notification.clicked' && event.data.session)
             void openNotificationSession(event.data.session);

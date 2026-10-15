@@ -20,11 +20,11 @@ vm.runInThisContext(slice('async function loadIdentity(', 'async function loadCo
 
 (async () => {
   global.fetch = async () => ({status: 401});
-  await assert.rejects(api('/api/config'), /Authentication required/);
+  await assert.rejects(api('/api/config'), {message: 'Authentication required', status: 401});
   assert.deepEqual(redirects, ['/login']);
   redirects.length = 0;
   global.fetch = async () => ({status: 403, ok: false, json: async () => ({error: 'access denied'})});
-  await assert.rejects(api('/api/sessions'), /access denied/);
+  await assert.rejects(api('/api/sessions'), {message: 'access denied', status: 403});
   assert.deepEqual(redirects, []);
 
   const identity = {};
@@ -40,7 +40,6 @@ vm.runInThisContext(slice('async function loadIdentity(', 'async function loadCo
       return {status: 200, ok: true, json: async () => ({defaultNamespace: 'team-a', username})};
     };
     await loadIdentity();
-    assert.equal(state.username, username || '');
     assert.equal(requests, 1);
     assert.equal(identity.hidden, !username);
     assert.equal(identity.textContent, username ? `Signed in as ${username}` : '');

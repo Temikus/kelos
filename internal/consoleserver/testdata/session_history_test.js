@@ -324,7 +324,7 @@ global.interruptActiveTurn = () => { interruptRequests++; };
 global.showToast = (message) => { toasts.push(message); };
 global.notifySessions = () => {};
 global.pruneBrowserNotifications = () => {};
-global.pruneCompletionReads = () => {};
+global.syncCompletionReads = () => {};
 global.closeSessionSectionEditor = () => {};
 
 global.scheduleCompletionRead = () => false;

@@ -289,6 +289,7 @@ func TestOIDCEndpointAuthorization(t *testing.T) {
 		{"create", "POST", "/api/sessions", `{"name":"created","namespace":"team-a","worker":{"type":"codex"}}`, []authorizationv1.ResourceAttributes{access("create", "sessions", "team-a", "")}},
 		{"apply", "POST", "/api/sessions/apply?namespace=team-a", manifest, []authorizationv1.ResourceAttributes{getSession, access("patch", "sessions", "team-a", "chat"), access("create", "sessions", "team-a", "")}},
 		{"section", "PATCH", "/api/sessions/team-a/chat/section", `{"section":"Work"}`, []authorizationv1.ResourceAttributes{getSession, access("patch", "sessions", "team-a", "chat")}},
+		{"read completion", "POST", "/api/sessions/team-a/chat/read", `{"uid":"uid-1","notificationId":"journal/1"}`, []authorizationv1.ResourceAttributes{getSession, access("patch", "sessions", "team-a", "chat")}},
 		{"display name", "PATCH", "/api/sessions/team-a/chat/display-name", `{"displayName":"Work"}`, []authorizationv1.ResourceAttributes{getSession, access("patch", "sessions", "team-a", "chat")}},
 		{"delete", "DELETE", "/api/sessions/team-a/chat", "", []authorizationv1.ResourceAttributes{access("delete", "sessions", "team-a", "chat")}},
 		{"reset", "POST", "/api/sessions/team-a/chat/reset", "", []authorizationv1.ResourceAttributes{getSession, access("create", "sessions/reset", "team-a", "chat")}},
