@@ -41,10 +41,10 @@ maintain (`self-development/kanon/*`) live in *this* repository, so they use the
 
 | Spawner | Trigger | Agent | Description |
 |---|---|---|---|
-| **kanon-workers** | Webhook: issue comment `/kelos pick-up` | Claude Opus | Creates a durable Session with the open issue URL and a dedicated issue branch |
+| **kanon-workers** | Webhook: issue comment `/kelos pick-up` | GPT-6.1 Sol | Creates a durable Session with the open issue URL and a dedicated issue branch |
 | **kanon-planner** | Webhook: issue comment `/kelos plan` | Claude Opus | Investigates an issue and posts a structured implementation plan — advisory only, no code changes |
 | **kanon-reviewer** | Webhook: PR comment `/kelos review` | Claude Opus | Reviews PRs on demand — analyzes code, checks conventions, and updates a sticky review comment |
-| **kanon-pr-responder** | Webhook: PR review/comment with `/kelos pick-up` | Claude Opus | Creates a durable Session with the open PR URL on its existing branch |
+| **kanon-pr-responder** | Webhook: PR review/comment with `/kelos pick-up` | GPT-6.1 Sol | Creates a durable Session with the open PR URL on its existing branch |
 | **kanon-triage** | Webhook: issue opened/reopened (untriaged) | Claude Opus | Classifies issues by kind/priority, detects duplicates, and recommends an actor |
 | **kanon-fake-user** | Cron (daily 09:00 UTC) | Claude Sonnet | Tests DX as a new user and maintains one unassigned issue slot for the highest-impact problem found |
 | **kanon-fake-strategist** | Cron (every 12 hours) | Claude Opus | Explores new use cases, integrations, and managed-settings types while maintaining one unassigned strategic issue slot |
@@ -80,7 +80,7 @@ the agent to find the best way to address it.
 | | |
 |---|---|
 | **Trigger** | GitHub `issue_comment` webhook with `/kelos pick-up` |
-| **Agent** | Claude Opus via Claude Code |
+| **Agent** | GPT-6.1 Sol via Codex |
 | **Storage** | 10 Gi PVC |
 
 **Key features:**
@@ -151,7 +151,7 @@ find the best way to address it.
 | | |
 |---|---|
 | **Trigger** | GitHub PR comment with `/kelos pick-up`, or a PR review whose body contains `/kelos pick-up` |
-| **Agent** | Claude Opus via Claude Code |
+| **Agent** | GPT-6.1 Sol via Codex |
 | **Storage** | 10 Gi PVC |
 
 **Key features:**
@@ -396,16 +396,23 @@ existing issue or PR with a fresh matching event if needed.
 
 ### 5. Agent Credentials Secret
 
-The spawners reuse the `kelos-credentials` secret (the AI agent credentials are
-the same regardless of repository). Every spawner uses Claude Code OAuth:
+All spawners share the `kelos-credentials` Secret and use OAuth. Workers and
+PR responders use Codex; other agents use Claude Code. Run `codex login`
+locally, then create or update the Secret with both credentials:
 
 ```bash
 kubectl create secret generic kelos-credentials \
-  --from-literal=CLAUDE_CODE_OAUTH_TOKEN=<your-claude-code-oauth-token>
+  --from-literal=CLAUDE_CODE_OAUTH_TOKEN=<your-claude-code-oauth-token> \
+  --from-file=CODEX_AUTH_JSON="$HOME/.codex/auth.json" \
+  --dry-run=client -o yaml | kubectl apply -f -
+kubectl label secret kelos-credentials kelos.dev/codex-oauth-refresh=true --overwrite
 ```
 
-For API-key auth, change the worker credential type to `api-key` and use
-`--from-literal=ANTHROPIC_API_KEY=<your-anthropic-api-key>`.
+The label enables scheduled refresh of `CODEX_AUTH_JSON`; the shared Claude
+credential is preserved.
+
+For API-key auth, change each agent's worker credential type to `api-key` and
+use `CODEX_API_KEY` for Codex or `ANTHROPIC_API_KEY` for Claude Code.
 
 ## Customizing
 

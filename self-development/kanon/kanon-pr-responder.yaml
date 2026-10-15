@@ -36,9 +36,9 @@ spec:
     worker:
       workspaceRef:
         name: kanon-session-agent
-      model: opus
+      model: gpt-6.1-sol
       effort: xhigh
-      type: claude-code
+      type: codex
       credentials:
         type: oauth
         secretRef:

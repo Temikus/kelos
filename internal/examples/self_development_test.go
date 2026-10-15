@@ -1017,43 +1017,43 @@ func TestDevelopmentSpawnersSetExpectedModelAndEffort(t *testing.T) {
 		{dir: "self-development", file: "kelos-fake-user.yaml", model: "sonnet", effort: "medium"},
 		{dir: "self-development", file: "kelos-image-update.yaml", model: "sonnet", effort: "medium"},
 		{dir: "self-development", file: "kelos-planner.yaml", model: "opus", effort: "xhigh"},
-		{dir: "self-development", file: "kelos-pr-responder.yaml", model: "opus", effort: "xhigh"},
+		{dir: "self-development", file: "kelos-pr-responder.yaml", model: "gpt-6.1-sol", effort: "xhigh"},
 		{dir: "self-development", file: "kelos-reviewer.yaml", model: "opus", effort: "xhigh"},
 		{dir: "self-development", file: "kelos-self-update.yaml", model: "opus", effort: "xhigh"},
 		{dir: "self-development", file: "kelos-squash-commits.yaml", model: "sonnet", effort: "medium"},
 		{dir: "self-development", file: "kelos-triage.yaml", model: "opus", effort: "high"},
-		{dir: "self-development", file: "kelos-workers.yaml", model: "opus", effort: "xhigh"},
+		{dir: "self-development", file: "kelos-workers.yaml", model: "gpt-6.1-sol", effort: "xhigh"},
 		{dir: "self-development/agora", file: "agora-config-update.yaml", model: "opus", effort: "xhigh"},
 		{dir: "self-development/agora", file: "agora-fake-strategist.yaml", model: "opus", effort: "xhigh"},
 		{dir: "self-development/agora", file: "agora-fake-user.yaml", model: "sonnet", effort: "medium"},
 		{dir: "self-development/agora", file: "agora-planner.yaml", model: "opus", effort: "xhigh"},
-		{dir: "self-development/agora", file: "agora-pr-responder.yaml", model: "opus", effort: "xhigh"},
+		{dir: "self-development/agora", file: "agora-pr-responder.yaml", model: "gpt-6.1-sol", effort: "xhigh"},
 		{dir: "self-development/agora", file: "agora-reviewer.yaml", model: "opus", effort: "xhigh"},
 		{dir: "self-development/agora", file: "agora-self-update.yaml", model: "opus", effort: "xhigh"},
 		{dir: "self-development/agora", file: "agora-squash-commits.yaml", model: "sonnet", effort: "medium"},
 		{dir: "self-development/agora", file: "agora-triage.yaml", model: "opus", effort: "high"},
-		{dir: "self-development/agora", file: "agora-workers.yaml", model: "opus", effort: "xhigh"},
+		{dir: "self-development/agora", file: "agora-workers.yaml", model: "gpt-6.1-sol", effort: "xhigh"},
 		{dir: "self-development/kanon", file: "kanon-config-update.yaml", model: "opus", effort: "xhigh"},
 		{dir: "self-development/kanon", file: "kanon-fake-strategist.yaml", model: "opus", effort: "xhigh"},
 		{dir: "self-development/kanon", file: "kanon-fake-user.yaml", model: "sonnet", effort: "medium"},
 		{dir: "self-development/kanon", file: "kanon-planner.yaml", model: "opus", effort: "xhigh"},
-		{dir: "self-development/kanon", file: "kanon-pr-responder.yaml", model: "opus", effort: "xhigh"},
+		{dir: "self-development/kanon", file: "kanon-pr-responder.yaml", model: "gpt-6.1-sol", effort: "xhigh"},
 		{dir: "self-development/kanon", file: "kanon-reviewer.yaml", model: "opus", effort: "xhigh"},
 		{dir: "self-development/kanon", file: "kanon-self-update.yaml", model: "opus", effort: "xhigh"},
 		{dir: "self-development/kanon", file: "kanon-squash-commits.yaml", model: "sonnet", effort: "medium"},
 		{dir: "self-development/kanon", file: "kanon-triage.yaml", model: "opus", effort: "high"},
-		{dir: "self-development/kanon", file: "kanon-workers.yaml", model: "opus", effort: "xhigh"},
+		{dir: "self-development/kanon", file: "kanon-workers.yaml", model: "gpt-6.1-sol", effort: "xhigh"},
 		{dir: "self-development/open-actions", file: "open-actions-api-reviewer.yaml", model: "opus", effort: "xhigh"},
 		{dir: "self-development/open-actions", file: "open-actions-config-update.yaml", model: "opus", effort: "xhigh"},
 		{dir: "self-development/open-actions", file: "open-actions-fake-strategist.yaml", model: "opus", effort: "xhigh"},
 		{dir: "self-development/open-actions", file: "open-actions-fake-user.yaml", model: "sonnet", effort: "medium"},
 		{dir: "self-development/open-actions", file: "open-actions-planner.yaml", model: "opus", effort: "xhigh"},
-		{dir: "self-development/open-actions", file: "open-actions-pr-responder.yaml", model: "opus", effort: "xhigh"},
+		{dir: "self-development/open-actions", file: "open-actions-pr-responder.yaml", model: "gpt-6.1-sol", effort: "xhigh"},
 		{dir: "self-development/open-actions", file: "open-actions-reviewer.yaml", model: "opus", effort: "xhigh"},
 		{dir: "self-development/open-actions", file: "open-actions-self-update.yaml", model: "opus", effort: "xhigh"},
 		{dir: "self-development/open-actions", file: "open-actions-squash-commits.yaml", model: "sonnet", effort: "medium"},
 		{dir: "self-development/open-actions", file: "open-actions-triage.yaml", model: "opus", effort: "high"},
-		{dir: "self-development/open-actions", file: "open-actions-workers.yaml", model: "opus", effort: "xhigh"},
+		{dir: "self-development/open-actions", file: "open-actions-workers.yaml", model: "gpt-6.1-sol", effort: "xhigh"},
 	}
 
 	for _, tt := range tests {
@@ -1253,7 +1253,7 @@ func assertSelfDevelopmentYAMLUsesWorkerSpec(t *testing.T, path string) {
 			if err := sigyaml.Unmarshal(doc, &spawner); err != nil {
 				t.Fatalf("decoding SessionSpawner from %s: %v", path, err)
 			}
-			assertWorkerSpecComplete(t, path, spawner.Spec.SessionTemplate.Worker)
+			assertWorkerSpecComplete(t, path, spawner.Spec.SessionTemplate.Worker, "codex")
 		case "Task":
 			var task kelos.Task
 			if err := sigyaml.Unmarshal(doc, &task); err != nil {
@@ -1295,7 +1295,7 @@ func assertTaskTemplateUsesWorkerSpec(t *testing.T, path string, template kelos.
 		t.Fatalf("%s taskTemplate must set worker or workerPoolRef", path)
 	}
 	if template.Worker != nil {
-		assertWorkerSpecComplete(t, path, *template.Worker)
+		assertWorkerSpecComplete(t, path, *template.Worker, "claude-code")
 	}
 	if template.Type != "" {
 		t.Fatalf("%s taskTemplate.type is deprecated; use taskTemplate.worker.type", path)
@@ -1330,7 +1330,7 @@ func assertTaskUsesWorkerSpec(t *testing.T, path string, spec kelos.TaskSpec) {
 		t.Fatalf("%s spec must set worker or workerPoolRef", path)
 	}
 	if spec.Worker != nil {
-		assertWorkerSpecComplete(t, path, *spec.Worker)
+		assertWorkerSpecComplete(t, path, *spec.Worker, "claude-code")
 	}
 	if spec.Type != "" {
 		t.Fatalf("%s spec.type is deprecated; use spec.worker.type", path)
@@ -1358,17 +1358,23 @@ func assertTaskUsesWorkerSpec(t *testing.T, path string, spec kelos.TaskSpec) {
 	}
 }
 
-func assertWorkerSpecComplete(t *testing.T, path string, worker kelos.WorkerSpec) {
+func assertWorkerSpecComplete(t *testing.T, path string, worker kelos.WorkerSpec, wantType string) {
 	t.Helper()
 
 	if len(worker.AgentConfigRefs) == 0 || worker.AgentConfigRefs[0].Name != "base-agent" {
 		t.Fatalf("%s worker.agentConfigRefs must start with base-agent, got %v", path, worker.AgentConfigRefs)
 	}
-	if worker.Type != "claude-code" {
-		t.Fatalf("%s worker.type = %q, want claude-code", path, worker.Type)
+	if worker.Type != wantType {
+		t.Fatalf("%s worker.type = %q, want %s", path, worker.Type, wantType)
 	}
 	if worker.Credentials == nil {
 		t.Fatalf("%s worker.credentials is nil", path)
+	}
+	if worker.Credentials.Type != kelos.CredentialTypeOAuth {
+		t.Fatalf("%s worker.credentials.type = %q, want oauth", path, worker.Credentials.Type)
+	}
+	if worker.Credentials.SecretRef == nil || worker.Credentials.SecretRef.Name != "kelos-credentials" {
+		t.Fatalf("%s worker.credentials.secretRef = %v, want kelos-credentials", path, worker.Credentials.SecretRef)
 	}
 }
 
