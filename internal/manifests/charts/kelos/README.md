@@ -298,9 +298,12 @@ Prefixes are required and must not start with `system:` or be a prefix of it
 names. Group claims must contain **comma-free group identifiers**: the proxy
 uses commas to delimit groups, so group names containing commas are not
 supported and must be mapped to identifiers at the IdP. Kelos accepts at most
-128 groups, 256 bytes per group, 8192 bytes for the group header, and 1024 bytes
-for the subject. Empty, repeated, or malformed identity headers are rejected;
-a user may have no groups and receive permissions through a User RoleBinding.
+1024 groups, 256 bytes per group, 65536 bytes (64 KiB) for the group header,
+and 1024 bytes for the subject. Empty, repeated, or malformed identity headers
+are rejected; a user may have no groups and receive permissions through a User
+RoleBinding.
+Large sessions also require ingress request and response header limits that
+accommodate the proxy's session cookies.
 
 The chart creates unbound `kelos-console-user` and `kelos-console-admin`
 ClusterRoles. To grant Session access and resource inspection in one namespace:
@@ -481,6 +484,22 @@ kelos install --values console-github.yaml \
 The provider requests `user:email read:org` and requires a verified primary
 email. `org` optionally restricts sign-in to members of one organization;
 authorize the OAuth application to read that organization's membership.
+To restrict sign-in to one team within that organization, also set
+`consoleServer.auth.github.team` to its slug, for example:
+
+```yaml
+consoleServer:
+  auth:
+    mode: github
+    github:
+      # Include the client, callback, Secret, and prefix settings shown above.
+      org: my-org
+      team: frontend-developers
+```
+
+`team` requires `org` and accepts a single team slug, not a display name,
+comma-separated list, or `org:team-slug`. With only `org`, any organization
+member may sign in. With both, the user must belong to that organization's team.
 Login restrictions grant no Kubernetes permissions. To grant the
 `my-org:frontend-developers` group Console access in an existing namespace:
 
@@ -496,12 +515,15 @@ names can change and be reused. Update User RoleBindings when accounts are
 renamed or removed, and choose identity prefixes unique to each GitHub/GHES
 instance. For immutable personal identities, use OIDC with stable subjects.
 GitHub groups include all organization names and `org:team-slug` values
-returned by the GitHub API for the user's OAuth token; `org` does not filter
-these groups. Kelos accepts at most 128 groups, 256 bytes per group, and
-8192 bytes for the comma-separated group header. Exceeding any of these limits
-returns 401 even after a successful sign-in. Groups are loaded at sign-in;
-the proxy's five-minute token validation does not reload organization or team
-membership. Sign out and sign in again to update these claims.
+returned by the GitHub API for the user's OAuth token; `org` and `team` do not
+filter these groups. Kelos accepts at most 1024 groups, 256 bytes per group, and
+65536 bytes (64 KiB) for the comma-separated group header, before adding the
+configured prefix. All groups are retained for RBAC; exceeding any of these
+limits returns 401 rather than truncating the identity. Large sessions also
+require ingress request and response header limits that accommodate the proxy's
+session cookies. Groups are loaded at sign-in; the proxy's five-minute token
+validation does not reload organization or team membership. Sign out and sign
+in again to update these claims.
 
 Removing a user from a GitHub organization or team does not end their existing
 Console login or update its groups. Activity can keep renewing the eight-hour
@@ -510,10 +532,11 @@ an existing login, [revoke the user's OAuth grant or access token for the app](h
 the proxy rejects that session on its next request after the five-minute
 validation interval elapses. To invalidate all Console logins, rotate the
 configured cookie secret and restart all Console server Pods; updating the
-Secret alone does not reload the proxy's cookie secret. Kubernetes RoleBinding
-changes affect subsequent requests. Token revocation and RBAC changes do not
-terminate established WebSockets; restart the Console server Pods to disconnect
-them.
+Secret alone does not reload the proxy's cookie secret. Do this when tightening
+`org` or `team` restrictions to require existing users to sign in again.
+Kubernetes RoleBinding changes affect subsequent requests. Token revocation and
+RBAC changes do not terminate established WebSockets; restart the Console server
+Pods to disconnect them.
 
 GitHub mode accepts the same `clientSecretKey`, `cookieSecretKey`, `image`,
 `reverseProxy`, and `trustedProxyIPs` settings as OIDC mode. Its cookies are

@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -61,23 +62,29 @@ func newConsoleTestGitHub(t *testing.T) *consoleTestProvider {
 				http.Error(w, "invalid token", http.StatusUnauthorized)
 				return
 			}
-			org := "kelos"
-			if identity["group"] == "outside" {
-				org = "other"
-			}
 			switch r.URL.Path {
 			case "/api/v3", "/api/v3/user":
 				write(w, map[string]interface{}{"id": 42, "login": identity["user"], "email": identity["user"] + "@example.com"})
 			case "/api/v3/user/emails":
 				write(w, []map[string]interface{}{{"email": identity["user"] + "@example.com", "primary": true, "verified": true}})
 			case "/api/v3/user/orgs", "/api/v3/user/teams":
-				if r.URL.Query().Get("page") != "1" {
-					write(w, []interface{}{})
-				} else if r.URL.Path == "/api/v3/user/orgs" {
-					write(w, []map[string]string{{"login": org}})
-				} else {
-					write(w, []map[string]interface{}{{"slug": identity["group"], "organization": map[string]string{"login": org}}})
+				items := []interface{}{}
+				for _, group := range consoleTestGitHubGroups(identity["group"]) {
+					org, team, isTeam := strings.Cut(group, ":")
+					if r.URL.Path == "/api/v3/user/teams" && isTeam {
+						items = append(items, map[string]interface{}{"slug": team, "organization": map[string]string{"login": org}})
+					} else if r.URL.Path == "/api/v3/user/orgs" && !isTeam {
+						items = append(items, map[string]string{"login": org})
+					}
 				}
+				page, _ := strconv.Atoi(r.URL.Query().Get("page"))
+				perPage, _ := strconv.Atoi(r.URL.Query().Get("per_page"))
+				if page < 1 || perPage != 100 {
+					http.Error(w, "invalid pagination", http.StatusBadRequest)
+					return
+				}
+				start := min((page-1)*perPage, len(items))
+				write(w, items[start:min(start+perPage, len(items))])
 			default:
 				http.NotFound(w, r)
 			}
@@ -85,4 +92,24 @@ func newConsoleTestGitHub(t *testing.T) *consoleTestProvider {
 	}))
 	t.Cleanup(provider.server.Close)
 	return provider
+}
+
+func consoleTestGitHubGroups(group string) []string {
+	org := "kelos"
+	if group == "outside" {
+		org = "other"
+	}
+	var groups []string
+	for i := range 207 {
+		groups = append(groups, fmt.Sprintf("engineering-organization-%03d", i))
+	}
+	groups = append(groups, org)
+	for i := range 203 {
+		groups = append(groups, fmt.Sprintf("engineering-organization-%03d:developers", i))
+	}
+	groups = append(groups, org+":"+group)
+	if group != "visitors" {
+		groups = append(groups, org+":console-users")
+	}
+	return groups
 }

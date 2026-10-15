@@ -88,8 +88,10 @@ func TestOIDCIdentityValidation(t *testing.T) {
 		{"group control", func(r *http.Request) { r.Header.Set("X-Kelos-Groups", "developers,ad\tmins") }},
 		{"group whitespace", func(r *http.Request) { r.Header.Set("X-Kelos-Groups", "developers, admins") }},
 		{"oversized group", func(r *http.Request) { r.Header.Set("X-Kelos-Groups", strings.Repeat("a", 257)) }},
-		{"oversized groups", func(r *http.Request) { r.Header.Set("X-Kelos-Groups", strings.Repeat("a", 8193)) }},
-		{"too many groups", func(r *http.Request) { r.Header.Set("X-Kelos-Groups", strings.Repeat("a,", 128)+"a") }},
+		{"oversized groups", func(r *http.Request) {
+			r.Header.Set("X-Kelos-Groups", strings.Repeat(strings.Repeat("a", 255)+",", 256)+"a")
+		}},
+		{"too many groups", func(r *http.Request) { r.Header.Set("X-Kelos-Groups", strings.Repeat("a,", 1024)+"a") }},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			s := oidcTestServer(t, reviewFunc(func(context.Context, *authorizationv1.SubjectAccessReview, metav1.CreateOptions) (*authorizationv1.SubjectAccessReview, error) {
@@ -103,6 +105,62 @@ func TestOIDCIdentityValidation(t *testing.T) {
 			s.ServeHTTP(w, r)
 			if w.Code != http.StatusUnauthorized {
 				t.Fatalf("status = %d, body = %s", w.Code, w.Body.String())
+			}
+		})
+	}
+}
+
+func TestProxyLargeMemberships(t *testing.T) {
+	var groups []string
+	for i := range 208 {
+		groups = append(groups, fmt.Sprintf("engineering-organization-%03d", i))
+	}
+	for i := range 205 {
+		groups = append(groups, fmt.Sprintf("engineering-organization-%03d:developers", i))
+	}
+	for _, mode := range []string{AuthModeOIDC, AuthModeGitHub} {
+		t.Run(mode, func(t *testing.T) {
+			var want []string
+			for _, group := range groups {
+				want = append(want, mode+":"+group)
+			}
+			reviewed := false
+			s := oidcTestServer(t, reviewFunc(func(_ context.Context, r *authorizationv1.SubjectAccessReview, _ metav1.CreateOptions) (*authorizationv1.SubjectAccessReview, error) {
+				reviewed = true
+				if r.Spec.User != mode+":alice" || !reflect.DeepEqual(r.Spec.Groups, want) {
+					t.Fatalf("principal = %#v", r.Spec)
+				}
+				r.Status.Allowed = true
+				return r, nil
+			}))
+			s.authMode = mode
+			s.proxyAuth.UsernamePrefix, s.proxyAuth.GroupsPrefix = mode+":", mode+":"
+			r := oidcRequest(http.MethodGet, "/api/sessions", "")
+			r.Header.Set("X-Kelos-Groups", strings.Join(groups, ","))
+			w := httptest.NewRecorder()
+			s.ServeHTTP(w, r)
+			if w.Code != http.StatusOK || !reviewed {
+				t.Fatalf("large membership status = %d, reviewed = %t, body = %s", w.Code, reviewed, w.Body.String())
+			}
+		})
+	}
+}
+
+func TestProxyGroupLimits(t *testing.T) {
+	s := oidcTestServer(t, reviewFunc(allowReview))
+	for _, test := range []struct {
+		name, groups string
+		count        int
+	}{
+		{"group count limit", strings.Repeat("a,", 1023) + "a", 1024},
+		{"group header byte limit", strings.Repeat(strings.Repeat("a", 255)+",", 255) + strings.Repeat("a", 256), 256},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			r := oidcRequest(http.MethodGet, "/api/sessions", "")
+			r.Header.Set("X-Kelos-Groups", test.groups)
+			identity, ok := s.proxyPrincipal(r)
+			if !ok || len(identity.groups) != test.count {
+				t.Fatalf("identity accepted = %t, groups = %d, want %d", ok, len(identity.groups), test.count)
 			}
 		})
 	}

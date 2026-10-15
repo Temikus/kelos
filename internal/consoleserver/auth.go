@@ -21,6 +21,9 @@ const (
 	AuthModeStaticToken = "staticToken"
 	AuthModeOIDC        = "oidc"
 	AuthModeGitHub      = "github"
+
+	maxProxyGroups            = 1024
+	maxProxyGroupsHeaderBytes = 64 * 1024
 )
 
 // AccessReviewer delegates authorization to the Kubernetes API server.
@@ -97,11 +100,11 @@ func (s *Server) proxyPrincipal(request *http.Request) (principal, bool) {
 		return principal{}, false
 	}
 	if len(groups) == 1 {
-		if len(groups[0]) > 8192 {
+		if len(groups[0]) > maxProxyGroupsHeaderBytes {
 			return principal{}, false
 		}
 		values := strings.Split(groups[0], ",")
-		if len(values) > 128 {
+		if len(values) > maxProxyGroups {
 			return principal{}, false
 		}
 		for _, group := range values {

@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/kelos-dev/kelos/internal/manifests"
+	"helm.sh/helm/v3/pkg/chartutil"
 )
 
 func consoleGitHubValues() map[string]interface{} {
@@ -35,7 +36,8 @@ func TestRenderConsoleGitHub(t *testing.T) {
 			if provider["oidcConfig"] != nil || provider["code_challenge_method"] != nil {
 				t.Fatalf("GitHub has OIDC settings: %#v", provider)
 			}
-			if provider["githubConfig"].(map[string]interface{})["org"] != "company" {
+			github := provider["githubConfig"].(map[string]interface{})
+			if github["org"] != "company" || github["team"] != nil {
 				t.Fatalf("GitHub org = %#v", provider["githubConfig"])
 			}
 			for key, path := range map[string]string{"loginURL": "/login/oauth/authorize", "redeemURL": "/login/oauth/access_token", "validateURL": "/api/v3"} {
@@ -89,6 +91,11 @@ func TestRenderConsoleGitHubRejectsInvalidConfiguration(t *testing.T) {
 		name   string
 		change func(map[string]interface{}, map[string]interface{})
 	}{
+		{"team without org", func(c, g map[string]interface{}) { g["team"] = "developers" }},
+		{"empty team", func(c, g map[string]interface{}) { g["org"], g["team"] = "company", "" }},
+		{"team display name", func(c, g map[string]interface{}) { g["org"], g["team"] = "company", "Developer Team" }},
+		{"qualified team", func(c, g map[string]interface{}) { g["org"], g["team"] = "company", "company:developers" }},
+		{"multiple teams", func(c, g map[string]interface{}) { g["org"], g["team"] = "company", "developers,admins" }},
 		{"missing client", func(c, g map[string]interface{}) { delete(g, "clientID") }},
 		{"missing secret", func(c, g map[string]interface{}) { delete(g, "secretName") }},
 		{"missing prefix", func(c, g map[string]interface{}) { delete(g, "usernamePrefix") }},
@@ -112,6 +119,45 @@ func TestRenderConsoleGitHubRejectsInvalidConfiguration(t *testing.T) {
 			test.change(console, github)
 			if _, err := Render(manifests.ChartFS, map[string]interface{}{"consoleServer": console}); err == nil {
 				t.Fatal("invalid GitHub configuration accepted")
+			}
+		})
+	}
+}
+
+func TestRenderConsoleGitHubTeam(t *testing.T) {
+	console := consoleGitHubValues()
+	config := console["auth"].(map[string]interface{})["github"].(map[string]interface{})
+	config["org"], config["team"] = "company", "console-users"
+	_, provider := testRenderConsoleProxy(t, "github", console)
+	github := provider["githubConfig"].(map[string]interface{})
+	if github["org"] != "company" || github["team"] != "console-users" {
+		t.Fatalf("GitHub restrictions = %#v", github)
+	}
+}
+
+func TestConsoleGitHubTeamSchema(t *testing.T) {
+	chart, err := loadChart(manifests.ChartFS)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		name  string
+		value map[string]interface{}
+		valid bool
+	}{
+		{"unrestricted", map[string]interface{}{}, true},
+		{"organization", map[string]interface{}{"org": "company"}, true},
+		{"team", map[string]interface{}{"org": "company", "team": "console-users"}, true},
+		{"team without organization", map[string]interface{}{"team": "console-users"}, false},
+		{"team with empty organization", map[string]interface{}{"org": "", "team": "console-users"}, false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			values := map[string]interface{}{"consoleServer": map[string]interface{}{
+				"auth": map[string]interface{}{"mode": "github", "github": test.value},
+			}}
+			err := chartutil.ValidateAgainstSingleSchema(values, chart.Schema)
+			if (err == nil) != test.valid {
+				t.Fatalf("schema validation error = %v, want valid = %t", err, test.valid)
 			}
 		})
 	}

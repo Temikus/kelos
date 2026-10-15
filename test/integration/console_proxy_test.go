@@ -51,16 +51,21 @@ import (
 )
 
 func TestConsoleOIDC(t *testing.T) {
-	testConsoleProxy(t, consoleserver.AuthModeOIDC)
+	testConsoleProxy(t, consoleserver.AuthModeOIDC, "")
 }
 
 func TestConsoleGitHub(t *testing.T) {
-	testConsoleProxy(t, consoleserver.AuthModeGitHub)
+	t.Run("organization", func(t *testing.T) {
+		testConsoleProxy(t, consoleserver.AuthModeGitHub, "")
+	})
+	t.Run("team", func(t *testing.T) {
+		testConsoleProxy(t, consoleserver.AuthModeGitHub, "console-users")
+	})
 }
 
 // testConsoleProxy exercises the rendered proxy configuration, authentication
 // callbacks, and Kubernetes RBAC without an external identity provider.
-func testConsoleProxy(t *testing.T, mode string) {
+func testConsoleProxy(t *testing.T, mode, githubTeam string) {
 	t.Helper()
 	prefix := mode + ":"
 	groupPrefix := prefix
@@ -160,7 +165,7 @@ func testConsoleProxy(t *testing.T, mode string) {
 	if err := os.WriteFile(secretPath, []byte("test-client-secret"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	proxyArgs, proxyHeaders := renderConsoleTestProxy(t, mode, issuer.server.URL, edge.URL)
+	proxyArgs, proxyHeaders := renderConsoleTestProxy(t, mode, issuer.server.URL, edge.URL, githubTeam)
 	headerPath := filepath.Join(directory, "oauth2-proxy.yaml")
 	var proxyConfig map[string]interface{}
 	if err := yaml.Unmarshal([]byte(proxyHeaders), &proxyConfig); err != nil {
@@ -308,6 +313,24 @@ func testConsoleProxy(t *testing.T, mode string) {
 		if status, _ := request(browser, "GET", "/api/config", "", true); status != http.StatusUnauthorized {
 			t.Fatalf("non-member authenticated: %d", status)
 		}
+		issuer.setIdentity("org-member", "visitors")
+		browser = newBrowser()
+		status, body := request(browser, "GET", "/oauth2/start?rd=/", "", false)
+		if githubTeam == "" {
+			if status != http.StatusOK {
+				t.Fatalf("organization member login = %d %s", status, body)
+			}
+			if status, _ := request(browser, "GET", "/api/sessions?namespace=team-a", "", false); status != http.StatusForbidden {
+				t.Fatalf("organization membership granted resource access: %d", status)
+			}
+		} else {
+			if status < http.StatusBadRequest {
+				t.Fatalf("non-team member login = %d %s", status, body)
+			}
+			if status, _ := request(browser, "GET", "/api/config", "", true); status != http.StatusUnauthorized {
+				t.Fatalf("non-team member authenticated: %d", status)
+			}
+		}
 	}
 	manifest := `{"name":"chat","namespace":"team-a","worker":{"type":"codex","credentials":{"type":"none"},"workspaceRef":{"name":"workspace-a"}}}`
 	if status, body := request(alice, "POST", "/api/sessions", manifest, false); status != 201 {
@@ -411,6 +434,15 @@ func testConsoleProxy(t *testing.T, mode string) {
 				t.Errorf("proxy forwarded %s", name)
 			}
 		}
+		if mode == consoleserver.AuthModeGitHub {
+			group := map[string]string{"alice": "developers-a", "bob": "developers-b"}[header.Get("X-Kelos-User")]
+			if group != "" {
+				want := strings.Join(consoleTestGitHubGroups(group), ",")
+				if header.Get("X-Kelos-Groups") != want {
+					t.Errorf("proxy did not preserve all verified GitHub groups for %s", header.Get("X-Kelos-User"))
+				}
+			}
+		}
 	}
 }
 
@@ -425,7 +457,7 @@ func unusedConsoleAddress(t *testing.T) string {
 	return address
 }
 
-func renderConsoleTestProxy(t *testing.T, mode, issuerURL, externalURL string) ([]string, string) {
+func renderConsoleTestProxy(t *testing.T, mode, issuerURL, externalURL, githubTeam string) ([]string, string) {
 	t.Helper()
 	provider := map[string]interface{}{
 		"clientID": "kelos-console", "redirectURL": externalURL + "/oauth2/callback", "secretName": "proxy",
@@ -434,6 +466,9 @@ func renderConsoleTestProxy(t *testing.T, mode, issuerURL, externalURL string) (
 	}
 	if mode == consoleserver.AuthModeGitHub {
 		provider["enterpriseURL"], provider["org"], provider["caSecretName"] = issuerURL, "kelos", "ghes-ca"
+		if githubTeam != "" {
+			provider["team"] = githubTeam
+		}
 	} else {
 		provider["issuerURL"] = issuerURL
 	}
