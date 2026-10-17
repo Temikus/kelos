@@ -899,7 +899,11 @@ func TestApplicationIncludesFileChangesView(t *testing.T) {
 		`id="changes-count"`,
 		`id="changes-view"`,
 		`id="changes-list"`,
-		`No file changes yet.`,
+		`id="changes-scope"`,
+		`<option value="uncommitted">Uncommitted</option>`,
+		`<option value="branch">Branch changes</option>`,
+		`id="changes-base"`,
+		`No uncommitted changes.`,
 	} {
 		if !strings.Contains(response.Body.String(), expected) {
 			t.Errorf("Console Sessions view does not contain %s", expected)

@@ -193,6 +193,9 @@ function resetHarness() {
     changesList: new TestNode('div'),
     changesCount: new TestNode('span'),
     changesSummary: new TestNode('span'),
+    changesScope: new TestNode('select'),
+    changesBaseLabel: new TestNode('label'),
+    changesBase: new TestNode('select'),
     currentRequest: new TestNode('div'),
     currentRequestButton: new TestNode('button'),
     currentRequestText: new TestNode('span'),
@@ -256,6 +259,8 @@ function resetHarness() {
     diffs: new Map(),
     fileChanges: new Map(),
     workspaceChanges: null,
+    changesScope: 'uncommitted',
+    changesBaseRef: '',
     changesRequestID: '',
     changesRefreshPending: false,
     pendingMessage: null,
@@ -1799,7 +1804,7 @@ function testWorkspaceChangesSnapshots() {
   assert.equal(state.fileChanges.get('new.txt'), diff);
   assert.equal(elements.changesList.querySelector('.file-change-name').textContent, 'new.txt');
   assert.equal(elements.changesList.querySelector('.file-change-added').textContent, '+1');
-  assert.equal(elements.changesSummary.textContent, '1 changed file · Compared with 123456789abc');
+  assert.equal(elements.changesSummary.textContent, '1 changed file · Uncommitted · HEAD 123456789abc');
 
   renderDiff({type: 'file.diff', turnId: 'old-turn', diff: '*** Add File: outdated.txt\n+outdated'});
   replayOlderHistoryPage([{type: 'file.diff', turnId: 'earlier-turn', diff: '*** Add File: earlier.txt\n+earlier'}]);
@@ -1808,7 +1813,7 @@ function testWorkspaceChangesSnapshots() {
   requestWorkspaceChanges();
   handleEvent({type: 'workspace.changes', requestId: requests[1].requestId, changes: {base: '123456789abcdef', files: []}});
   assert.equal(state.fileChanges.size, 0);
-  assert.equal(elements.changesList.textContent, 'No file changes yet.');
+  assert.equal(elements.changesList.textContent, 'No uncommitted changes.');
   handleEvent({type: 'workspace.changes', requestId: requests[0].requestId, changes: {files: [{name: 'stale.txt', diff}]}});
   assert.equal(state.fileChanges.size, 0, 'Stale responses must not restore files');
 
@@ -1860,8 +1865,109 @@ function testWorkspaceChangesPreservesUnchangedDOM() {
   assert.equal(elements.changesList.querySelector('.file-change-added').textContent, '+2');
 }
 
+function testWorkspaceChangesScopeSelection() {
+  resetHarness();
+  state.selected = {namespace: 'default', name: 'one', phase: 'Ready'};
+  const view = createSessionView();
+  activateSessionView(view);
+  const requests = [];
+  state.socket = {readyState: WebSocket.OPEN, send: value => requests.push(JSON.parse(value))};
+  requestWorkspaceChanges();
+  assert.equal(requests[0].scope, 'uncommitted');
+  assert.equal(requests[0].baseRef, undefined);
+  const branches = ['refs/heads/main', 'refs/heads/feature', 'refs/remotes/origin/main'];
+  handleEvent({type: 'workspace.changes', requestId: requests[0].requestId, changes: {base: '123456789abcdef', branches, files: []}});
+  assert.equal(elements.changesBaseLabel.hidden, true);
+  assert.deepEqual(elements.changesBase.children.map(option => option.value), ['', ...branches]);
+  assert.deepEqual(elements.changesBase.children.map(option => option.textContent), ['Select base branch', 'main', 'feature', 'origin/main']);
+
+  requestWorkspaceChanges();
+  elements.changesScope.value = 'branch';
+  elements.changesBase.value = 'refs/heads/main';
+  changeChangesComparison();
+  assert.equal(requests.length, 3);
+  assert.equal(requests[2].scope, 'branch');
+  assert.equal(requests[2].baseRef, 'refs/heads/main');
+  assert.equal(elements.changesBaseLabel.hidden, false);
+  assert.equal(elements.changesList.textContent, 'Loading workspace changes…');
+  handleEvent({type: 'workspace.changes', requestId: requests[1].requestId, changes: {files: [{name: 'stale.txt', diff: '+stale'}]}});
+  assert.equal(state.fileChanges.size, 0, 'A response from another scope must be ignored');
+  const snapshot = {scope: 'branch', baseRef: 'refs/heads/main', base: '123456789abcdef', branches,
+    files: [{name: 'committed.txt', diff: '*** Add File: committed.txt\n+committed'}]};
+  handleEvent({type: 'workspace.changes', requestId: requests[2].requestId, changes: snapshot});
+  assert.equal(state.fileChanges.get('committed.txt'), snapshot.files[0].diff);
+  assert.equal(elements.changesSummary.textContent, '1 changed file · Committed against main · Merge base 123456789abc');
+
+  requestWorkspaceChanges(true);
+  handleEvent({type: 'workspace.changes', requestId: requests[3].requestId, changes: {...snapshot, files: []}});
+  assert.equal(state.changesScope, 'branch', 'A clean result must not switch scopes');
+  assert.equal(state.changesBaseRef, 'refs/heads/main');
+  assert.equal(elements.changesList.textContent, 'No committed branch changes.');
+  saveCurrentSessionView();
+  activateSessionView(createSessionView());
+  assert.equal(elements.changesScope.value, 'uncommitted');
+  activateSessionView(view);
+  assert.equal(elements.changesScope.value, 'branch');
+  assert.equal(elements.changesBase.value, 'refs/heads/main');
+  resetCurrentSessionView();
+  assert.equal(state.changesScope, 'branch', 'History replay must not reset the selected scope');
+  assert.equal(state.changesBaseRef, 'refs/heads/main');
+}
+
+function testWorkspaceChangesBaseSelection() {
+  resetHarness();
+  state.selected = {namespace: 'default', name: 'one', phase: 'Ready'};
+  const requests = [];
+  state.socket = {readyState: WebSocket.OPEN, send: value => requests.push(JSON.parse(value))};
+  elements.changesScope.value = 'branch';
+  elements.changesBase.value = '';
+  changeChangesComparison();
+  handleEvent({type: 'workspace.changes', requestId: requests[0].requestId, changes: {
+    scope: 'branch', branches: ['refs/heads/main', 'refs/heads/develop'], files: [], message: 'Choose a base branch to compare committed changes',
+  }});
+  assert.equal(state.changesBaseRef, '');
+  assert.equal(elements.changesList.textContent, 'Choose a base branch to compare committed changes');
+
+  elements.changesBase.value = 'refs/heads/main';
+  changeChangesComparison();
+  elements.changesBase.value = 'refs/heads/develop';
+  changeChangesComparison();
+  handleEvent({type: 'workspace.changes', requestId: requests[1].requestId, changes: {files: [{name: 'stale.txt', diff: '+stale'}]}});
+  assert.equal(state.fileChanges.size, 0, 'A response for another base branch must be ignored');
+  handleEvent({type: 'workspace.changes', requestId: requests[2].requestId, changes: {
+    scope: 'branch', branches: ['refs/heads/main'], files: [], message: 'Unable to read workspace changes: base branch "refs/heads/develop" is unavailable',
+  }});
+  assert.equal(elements.changesBase.value, 'refs/heads/develop', 'Unavailable branches must not silently select another base');
+  assert.match(elements.changesList.textContent, /refs\/heads\/develop/);
+
+  requestWorkspaceChanges();
+  handleEvent({type: 'workspace.changes', requestId: requests[3].requestId, changes: {files: [{name: 'wrong-scope.txt', diff: '+uncommitted'}]}});
+  assert.equal(state.fileChanges.size, 0, 'A runtime without branch support must not show an uncommitted diff as branch changes');
+  assert.equal(elements.changesList.textContent, 'Branch changes require an updated Session runtime');
+}
+
+function testWorkspaceChangesReportsBranchListTruncation() {
+  resetHarness();
+  state.selected = {namespace: 'default', name: 'one', phase: 'Ready'};
+  const requests = [];
+  state.socket = {readyState: WebSocket.OPEN, send: value => requests.push(JSON.parse(value))};
+  elements.changesScope.value = 'branch';
+  elements.changesBase.value = 'refs/heads/main';
+  changeChangesComparison();
+  const snapshot = {scope: 'branch', baseRef: 'refs/heads/main', base: '123456789abcdef', branches: ['refs/heads/main'], files: []};
+  handleEvent({type: 'workspace.changes', requestId: requests[0].requestId, changes: snapshot});
+  assert.equal(elements.changesSummary.textContent, '0 changed files · Committed against main · Merge base 123456789abc');
+  requestWorkspaceChanges();
+  handleEvent({type: 'workspace.changes', requestId: requests[1].requestId, changes: {...snapshot, branchesTruncated: true}});
+  assert.equal(elements.changesSummary.textContent, '0 changed files · Committed against main · Merge base 123456789abc · Branch list truncated');
+  assert.equal(elements.changesBase.value, 'refs/heads/main');
+}
+
 testWorkspaceChangesSnapshots();
 testWorkspaceChangesPreservesUnchangedDOM();
+testWorkspaceChangesScopeSelection();
+testWorkspaceChangesBaseSelection();
+testWorkspaceChangesReportsBranchListTruncation();
 testSessionViewSaveAndRestore();
 testSessionViewReset();
 testSessionProgressLifecycle();

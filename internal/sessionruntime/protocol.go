@@ -139,6 +139,8 @@ type RuntimeRateLimit struct {
 type ClientRequest struct {
 	Type             string              `json:"type"`
 	RequestID        string              `json:"requestId,omitempty"`
+	Scope            string              `json:"scope,omitempty"`
+	BaseRef          string              `json:"baseRef,omitempty"`
 	Since            int64               `json:"since,omitempty"`
 	JournalID        string              `json:"journalId,omitempty"`
 	HistoryBounds    bool                `json:"historyBounds,omitempty"`

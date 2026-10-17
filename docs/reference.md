@@ -474,14 +474,27 @@ request for the visible response has scrolled out of view, a compact **Current
 request** link follows it while browsing history and scrolls back to the full
 request when clicked. The link stays hidden while viewing file changes.
 
-The web client's **Changes** tab compares the Git workspace with the commit
-checked out when the Session runtime first records its comparison base. It
-includes committed, staged, and unstaged changes, plus untracked files that Git
-does not ignore, for every agent type. Existing uncommitted changes are included.
-The comparison base survives runtime restarts in the Session state directory;
-Sessions created before this feature record their base on the first successful
-Git inspection after upgrading. A repository without commits uses an empty
-comparison base. Renames appear as a deletion and an addition.
+The web client's **Changes** tab offers two review scopes for every supported
+Session agent:
+
+- **Uncommitted** (default) compares the Git workspace with the current `HEAD`
+  commit. It includes staged and unstaged changes, plus untracked files that Git
+  does not ignore. Existing uncommitted changes are included. Committed changes
+  disappear on the next refresh, while remaining uncommitted edits stay visible.
+  A repository without commits uses an empty comparison base.
+- **Branch changes** compares the current `HEAD` commit with its merge base with
+  the **Base branch** you select. It shows committed changes, so you can review
+  an agent's work after it commits. Staged, unstaged, and untracked work appears
+  under **Uncommitted**. Choose from local branches and remote-tracking branches
+  already available in the workspace; the Console does not fetch remote refs.
+  An unavailable base or branches without shared history produce an error.
+  Before the current branch's first commit, this scope shows no committed changes.
+  The base selector displays up to 1,000 branches and 128 KiB of encoded branch
+  names, retaining the selected base when the list is truncated.
+
+Automatic refreshes, commits, and reconnects preserve the selected scope and base
+branch. Reloading the browser page resets the selection to **Uncommitted**.
+Renames appear as a deletion and an addition.
 
 Changes refresh after connecting and completing a turn, when opening the tab,
 and every five seconds while the tab is visible. This includes edits made through
@@ -491,8 +504,8 @@ errors and non-Git workspaces, and displays up to 1,000 changed files and 1 MiB
 of diff content. Very long paths can reduce the number of displayed files. The
 tab reports when the file list or diff is truncated, or when files cannot be
 included (for example, a nested repository without commits). Git inspection
-errors do not prevent the Session from starting. If initialization fails, the
-runtime retries recording the comparison base on subsequent refreshes.
+errors do not prevent the Session from starting; subsequent refreshes retry the
+comparison.
 
 The Session sidebar shows compact relative activity times, and the selected
 Session header shows whether it is active now, when it was last active, or when
