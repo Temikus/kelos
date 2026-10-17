@@ -226,7 +226,7 @@ func Run(ctx context.Context, config Config) error {
 	if err != nil {
 		return err
 	}
-	changes, err := newWorkspaceChangesCollector(ctx, config.WorkingDir, config.StateDir, config.Environment)
+	changes, err := newWorkspaceChangesCollector(config.WorkingDir, config.StateDir, config.Environment)
 	if err != nil {
 		journal.Close()
 		return err
@@ -1670,22 +1670,23 @@ func (s *Server) handleConnection(ctx context.Context, connection net.Conn) {
 		case "subscribe":
 			subscribe(request.Since, request.JournalID, request.HistoryBounds, request.HistoryItems, request.HistoryBytes)
 		case "workspace.changes":
-			go func(requestID string) {
+			go func(request ClientRequest) {
 				changes := WorkspaceChanges{Files: []WorkspaceFileChange{}, Message: "Workspace changes are unavailable"}
 				if s.workspaceChanges != nil {
 					var err error
-					changes, err = s.workspaceChanges.capture(connectionCtx)
+					changes, err = s.workspaceChanges.capture(connectionCtx, request.Scope, request.BaseRef)
 					if err != nil {
-						changes = WorkspaceChanges{Files: []WorkspaceFileChange{}, Message: "Unable to read workspace changes: " + err.Error()}
+						changes.Files = []WorkspaceFileChange{}
+						changes.Message = "Unable to read workspace changes: " + err.Error()
 					}
 				}
 				writeMu.Lock()
 				defer writeMu.Unlock()
 				select {
-				case out <- Event{Type: EventWorkspaceChanges, RequestID: requestID, Changes: &changes}:
+				case out <- Event{Type: EventWorkspaceChanges, RequestID: request.RequestID, Changes: &changes}:
 				case <-connectionCtx.Done():
 				}
-			}(request.RequestID)
+			}(request)
 		case "history":
 			start, retained, err := s.loadHistoryPage(request.RequestID, request.HistoryCursor)
 			if err != nil {

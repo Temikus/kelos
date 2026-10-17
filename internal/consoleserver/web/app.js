@@ -111,6 +111,9 @@
         changes: document.querySelector('#changes-view'),
         changesList: document.querySelector('#changes-list'),
         changesSummary: document.querySelector('#changes-summary'),
+        changesScope: document.querySelector('#changes-scope'),
+        changesBaseLabel: document.querySelector('#changes-base-label'),
+        changesBase: document.querySelector('#changes-base'),
         changesCount: document.querySelector('#changes-count'),
         viewTabs: document.querySelector('.view-tabs'),
         conversationTab: document.querySelector('#conversation-tab'),
@@ -206,6 +209,8 @@
         diffs: new Map(),
         fileChanges: new Map(),
         workspaceChanges: null,
+        changesScope: 'uncommitted',
+        changesBaseRef: '',
         changesRequestID: '',
         changesRefreshPending: false,
         pendingMessage: null,
@@ -1704,6 +1709,8 @@ ${specs[collection.resource]}`;
             diffs: new Map(),
             fileChanges: new Map(),
             workspaceChanges: null,
+            changesScope: 'uncommitted',
+            changesBaseRef: '',
             pendingMessage: null,
             activeTurn: false,
             activeTurnID: '',
@@ -1734,6 +1741,8 @@ ${specs[collection.resource]}`;
         view.diffs = state.diffs;
         view.fileChanges = state.fileChanges;
         view.workspaceChanges = state.workspaceChanges;
+        view.changesScope = state.changesScope;
+        view.changesBaseRef = state.changesBaseRef;
         view.pendingMessage = state.pendingMessage;
         view.activeTurn = state.activeTurn;
         view.activeTurnID = state.activeTurnID;
@@ -1747,13 +1756,20 @@ ${specs[collection.resource]}`;
         view.pinHistoryToBottom = state.pinHistoryToBottom;
     }
     function updateFileChangesHeader() {
+        renderChangesControls();
         const count = state.fileChanges.size;
         elements.changesCount.textContent = String(count);
         const snapshot = state.workspaceChanges;
         const summary = count === 1 ? '1 changed file' : `${count} changed files`;
+        const comparison = state.changesScope === 'branch'
+            ? `Committed against ${changesBranchLabel(state.changesBaseRef)} · Merge base ${snapshot?.base?.slice(0, 12)}`
+            : `Uncommitted · HEAD ${snapshot?.base?.slice(0, 12)}`;
         elements.changesSummary.textContent = snapshot?.message || (snapshot
-            ? `${summary} · Compared with ${snapshot.base?.slice(0, 12)}${snapshot.truncated ? ' · Diff content truncated' : ''}`
+            ? `${summary} · ${comparison}${snapshot.truncated ? ' · Diff content truncated' : ''}`
             : 'Loading workspace changes…');
+        if (state.changesScope === 'branch' && snapshot?.branchesTruncated) {
+            elements.changesSummary.textContent += ' · Branch list truncated';
+        }
     }
     function activateSessionView(view) {
         state.currentView = view;
@@ -1765,6 +1781,8 @@ ${specs[collection.resource]}`;
         state.diffs = view.diffs;
         state.fileChanges = view.fileChanges;
         state.workspaceChanges = view.workspaceChanges;
+        state.changesScope = view.changesScope;
+        state.changesBaseRef = view.changesBaseRef;
         state.pendingMessage = view.pendingMessage;
         state.activeTurn = view.activeTurn;
         state.activeTurnID = view.activeTurnID;
@@ -5400,6 +5418,44 @@ spec:
                 scrollToBottom();
         }
     }
+    function changesBranchLabel(ref) {
+        return ref.replace(/^refs\/(heads|remotes)\//, '');
+    }
+    function renderChangesControls() {
+        elements.changesScope.value = state.changesScope;
+        elements.changesBaseLabel.hidden = state.changesScope !== 'branch';
+        const branches = state.workspaceChanges?.branches || [];
+        const refs = state.changesBaseRef && !branches.includes(state.changesBaseRef)
+            ? [...branches, state.changesBaseRef] : branches;
+        const key = JSON.stringify(refs);
+        if (elements.changesBase.dataset.branches !== key) {
+            elements.changesBase.dataset.branches = key;
+            const placeholder = document.createElement('option');
+            placeholder.value = '';
+            placeholder.textContent = 'Select base branch';
+            const options = refs.map(ref => {
+                const option = document.createElement('option');
+                option.value = ref;
+                option.textContent = changesBranchLabel(ref);
+                return option;
+            });
+            elements.changesBase.replaceChildren(placeholder, ...options);
+        }
+        elements.changesBase.value = state.changesBaseRef;
+    }
+    function changeChangesComparison() {
+        state.changesScope = elements.changesScope.value;
+        state.changesBaseRef = elements.changesBase.value;
+        state.changesRequestID = '';
+        state.changesRefreshPending = false;
+        state.workspaceChanges = {
+            files: [], branches: state.workspaceChanges?.branches, branchesTruncated: state.workspaceChanges?.branchesTruncated,
+            message: 'Loading workspace changes…',
+        };
+        state.fileChanges = new Map();
+        renderFileChanges();
+        requestWorkspaceChanges();
+    }
     function requestWorkspaceChanges(refreshPending = false) {
         if (!state.socket || state.socket.readyState !== WebSocket.OPEN)
             return;
@@ -5408,15 +5464,24 @@ spec:
             return;
         }
         state.changesRequestID = sessionRequestID('changes');
-        state.socket.send(JSON.stringify({ type: 'workspace.changes', requestId: state.changesRequestID }));
+        state.socket.send(JSON.stringify({
+            type: 'workspace.changes', requestId: state.changesRequestID,
+            scope: state.changesScope, baseRef: state.changesScope === 'branch' ? state.changesBaseRef : undefined,
+        }));
     }
     function receiveWorkspaceChanges(event) {
         if (!state.changesRequestID || event.requestId !== state.changesRequestID)
             return;
         state.changesRequestID = '';
         const previous = state.workspaceChanges;
-        const snapshot = event.changes || { files: [], message: event.text || 'Workspace changes are unavailable' };
+        const received = event.changes || { files: [], message: event.text || 'Workspace changes are unavailable' };
+        const snapshot = state.changesScope === 'branch' && received.scope !== 'branch'
+            ? { files: [], branches: received.branches, message: 'Branch changes require an updated Session runtime' }
+            : received;
         const unchanged = previous && previous.base === snapshot.base && previous.message === snapshot.message
+            && previous.scope === snapshot.scope && previous.baseRef === snapshot.baseRef
+            && JSON.stringify(previous.branches) === JSON.stringify(snapshot.branches)
+            && previous.branchesTruncated === snapshot.branchesTruncated
             && previous.truncated === snapshot.truncated && previous.files.length === snapshot.files.length
             && previous.files.every((file, index) => file.name === snapshot.files[index].name && file.diff === snapshot.files[index].diff);
         if (!unchanged) {
@@ -5512,7 +5577,9 @@ spec:
             const empty = document.createElement('div');
             empty.className = 'changes-empty';
             empty.textContent = !state.selected ? 'Choose a Session to inspect its file changes.'
-                : state.workspaceChanges?.message || (state.workspaceChanges ? 'No file changes yet.' : 'Loading workspace changes…');
+                : state.workspaceChanges?.message || (state.workspaceChanges
+                    ? (state.changesScope === 'branch' ? 'No committed branch changes.' : 'No uncommitted changes.')
+                    : 'Loading workspace changes…');
             elements.changesList.append(empty);
             return;
         }
@@ -6338,6 +6405,8 @@ spec:
     elements.sessionActionsMenu.addEventListener('focusout', handleSessionActionsFocusOut);
     elements.conversationTab.addEventListener('click', () => setActiveView('conversation'));
     elements.changesTab.addEventListener('click', () => setActiveView('changes'));
+    elements.changesScope.addEventListener('change', changeChangesComparison);
+    elements.changesBase.addEventListener('change', changeChangesComparison);
     elements.terminalTab.addEventListener('click', () => setActiveView('terminal'));
     elements.viewChoice.addEventListener('change', () => setActiveView(elements.viewChoice.value));
     elements.viewTabs.addEventListener('keydown', handleViewTabKeydown);

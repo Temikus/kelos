@@ -6,10 +6,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -17,21 +17,28 @@ import (
 )
 
 const (
-	workspaceChangesBaseFile = "changes-base"
-	maxWorkspaceDiffBytes    = 1024 * 1024
-	maxWorkspaceChangeFiles  = 1000
-	// JSON escaping can expand diff text sixfold; reserve room for the file list
-	// and diagnostics below the console bridge's 8 MiB event limit.
-	maxWorkspaceFileListBytes = 512 * 1024
-	maxWorkspaceGitErrorBytes = 4096
+	workspaceChangesUncommitted = "uncommitted"
+	workspaceChangesBranch      = "branch"
+	maxWorkspaceDiffBytes       = 1024 * 1024
+	maxWorkspaceChangeFiles     = 1000
+	maxWorkspaceBranches        = 1000
+	// JSON escaping can expand diff text sixfold; reserve room for the file and
+	// branch lists and diagnostics below the console bridge's 8 MiB event limit.
+	maxWorkspaceFileListBytes   = 512 * 1024
+	maxWorkspaceBranchListBytes = 128 * 1024
+	maxWorkspaceGitErrorBytes   = 4096
 )
 
-// WorkspaceChanges is a bounded workspace comparison against a persisted Git base.
+// WorkspaceChanges is a bounded Git comparison for the selected review scope.
 type WorkspaceChanges struct {
-	Base      string                `json:"base,omitempty"`
-	Files     []WorkspaceFileChange `json:"files"`
-	Message   string                `json:"message,omitempty"`
-	Truncated bool                  `json:"truncated,omitempty"`
+	Scope             string                `json:"scope,omitempty"`
+	BaseRef           string                `json:"baseRef,omitempty"`
+	Base              string                `json:"base,omitempty"`
+	Branches          []string              `json:"branches,omitempty"`
+	BranchesTruncated bool                  `json:"branchesTruncated,omitempty"`
+	Files             []WorkspaceFileChange `json:"files"`
+	Message           string                `json:"message,omitempty"`
+	Truncated         bool                  `json:"truncated,omitempty"`
 }
 
 // WorkspaceFileChange keeps the file list independent of diff content limits.
@@ -47,7 +54,7 @@ type workspaceChangesCollector struct {
 	environment []string
 }
 
-func newWorkspaceChangesCollector(ctx context.Context, workingDir, stateDir string, environment []string) (*workspaceChangesCollector, error) {
+func newWorkspaceChangesCollector(workingDir, stateDir string, environment []string) (*workspaceChangesCollector, error) {
 	if workingDir == "" || stateDir == "" {
 		return nil, errors.New("workspace changes require working and state directories")
 	}
@@ -60,13 +67,7 @@ func newWorkspaceChangesCollector(ctx context.Context, workingDir, stateDir stri
 			return nil, fmt.Errorf("workspace changes path %q is not a directory", dir)
 		}
 	}
-	c := &workspaceChangesCollector{workingDir: workingDir, stateDir: stateDir, environment: replaceProcessEnv(environment, "LC_ALL", "C")}
-	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
-	defer cancel()
-	if _, _, err := c.base(ctx); err != nil {
-		log.Printf("Unable to initialize workspace changes error=%v", err)
-	}
-	return c, nil
+	return &workspaceChangesCollector{workingDir: workingDir, stateDir: stateDir, environment: replaceProcessEnv(environment, "LC_ALL", "C")}, nil
 }
 
 func (c *workspaceChangesCollector) command(ctx context.Context, dir string, environment []string, args ...string) *exec.Cmd {
@@ -91,7 +92,7 @@ func (c *workspaceChangesCollector) output(ctx context.Context, dir string, envi
 	return output, err
 }
 
-func (c *workspaceChangesCollector) base(ctx context.Context) (string, string, error) {
+func (c *workspaceChangesCollector) head(ctx context.Context) (string, string, error) {
 	output, err := c.output(ctx, c.workingDir, c.environment, "rev-parse", "--show-toplevel")
 	if err != nil {
 		if strings.Contains(err.Error(), "not a git repository") {
@@ -100,106 +101,161 @@ func (c *workspaceChangesCollector) base(ctx context.Context) (string, string, e
 		return "", "", fmt.Errorf("finding workspace repository: %w", err)
 	}
 	root := strings.TrimSpace(string(output))
-	basePath := filepath.Join(c.stateDir, workspaceChangesBaseFile)
-	if saved, err := os.ReadFile(basePath); err == nil {
-		base := strings.TrimSpace(string(saved))
-		if base == "" {
-			return "", "", errors.New("workspace changes base is empty")
-		}
-		return root, base, nil
-	} else if !errors.Is(err, os.ErrNotExist) {
-		return "", "", fmt.Errorf("reading workspace changes base: %w", err)
-	}
 	output, err = c.output(ctx, root, c.environment, "rev-parse", "--verify", "HEAD")
 	if err != nil {
-		// A repository without commits starts with an empty comparison base.
 		if _, refErr := c.output(ctx, root, c.environment, "symbolic-ref", "HEAD"); refErr != nil {
 			return "", "", fmt.Errorf("reading workspace HEAD: %w", err)
 		}
-		output, err = c.output(ctx, root, c.environment, "hash-object", "-w", "-t", "tree", "--stdin")
-		if err != nil {
-			return "", "", fmt.Errorf("creating empty workspace base: %w", err)
-		}
+		return root, "", nil
 	}
-	base := strings.TrimSpace(string(output))
-	if err := os.WriteFile(basePath+".tmp", []byte(base+"\n"), 0600); err != nil {
-		return "", "", fmt.Errorf("saving workspace changes base: %w", err)
-	}
-	if err := os.Rename(basePath+".tmp", basePath); err != nil {
-		return "", "", fmt.Errorf("saving workspace changes base: %w", err)
-	}
-	return root, base, nil
+	return root, strings.TrimSpace(string(output)), nil
 }
 
-func (c *workspaceChangesCollector) capture(ctx context.Context) (WorkspaceChanges, error) {
+func (c *workspaceChangesCollector) capture(ctx context.Context, scope, baseRef string) (WorkspaceChanges, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-	root, base, err := c.base(ctx)
-	if err != nil {
-		return WorkspaceChanges{}, err
+	if scope == "" {
+		scope = workspaceChangesUncommitted
 	}
-	changes := WorkspaceChanges{Base: base, Files: []WorkspaceFileChange{}}
+	changes := WorkspaceChanges{Scope: scope, Files: []WorkspaceFileChange{}}
+	if scope != workspaceChangesUncommitted && scope != workspaceChangesBranch {
+		return changes, fmt.Errorf("unknown workspace changes scope %q", scope)
+	}
+	root, head, err := c.head(ctx)
+	if err != nil {
+		return changes, err
+	}
 	if root == "" {
 		changes.Message = "Changes are unavailable outside a Git workspace"
 		return changes, nil
 	}
-	dir, err := os.MkdirTemp(c.stateDir, "changes-")
+	output, err := c.output(ctx, root, c.environment, "for-each-ref", "--format=%(refname)%09%(symref)", "refs/heads", "refs/remotes")
 	if err != nil {
-		return changes, err
+		return changes, fmt.Errorf("listing workspace branches: %w", err)
 	}
-	defer os.RemoveAll(dir)
-	index, err := filepath.Abs(filepath.Join(dir, "index"))
-	if err != nil {
-		return changes, err
-	}
-	environment := replaceProcessEnv(c.environment, "GIT_INDEX_FILE", index)
-	indexPath, err := c.output(ctx, root, c.environment, "rev-parse", "--git-path", "index")
-	if err != nil {
-		return changes, err
-	}
-	path := strings.TrimSpace(string(indexPath))
-	if !filepath.IsAbs(path) {
-		path = filepath.Join(root, path)
-	}
-	if data, err := os.ReadFile(path); err == nil {
-		if err := os.WriteFile(index, data, 0600); err != nil {
-			return changes, err
+	branchLimit, branchListBytes := maxWorkspaceBranches, 2
+	reserveBase := scope == workspaceChangesBranch && baseRef != ""
+	if reserveBase {
+		encoded, _ := json.Marshal(baseRef)
+		if len(encoded)+1 > maxWorkspaceBranchListBytes-branchListBytes {
+			return changes, errors.New("base branch name exceeds the display limit")
 		}
-	} else if errors.Is(err, os.ErrNotExist) {
-		if _, err := c.output(ctx, root, environment, "read-tree", "--empty"); err != nil {
-			return changes, err
-		}
-	} else {
-		return changes, err
+		branchListBytes += len(encoded) + 1
+		branchLimit--
 	}
-	output, err := c.output(ctx, root, environment, "ls-files", "--others", "--exclude-standard", "-z")
-	if err != nil {
-		return changes, fmt.Errorf("listing untracked workspace files: %w", err)
-	}
-	addArgs := []string{"add", "--intent-to-add", "--ignore-errors", "--", "."}
-	// Unborn nested repositories cannot be represented by a Git diff.
-	for _, name := range strings.Split(string(output), "\x00") {
-		if !strings.HasSuffix(name, "/") {
+	baseFound := false
+	for _, line := range strings.Split(strings.TrimSuffix(string(output), "\n"), "\n") {
+		ref, symbolic, _ := strings.Cut(line, "\t")
+		if ref == "" || symbolic != "" {
 			continue
 		}
-		if _, err := c.output(ctx, filepath.Join(root, name), c.environment, "rev-parse", "--verify", "HEAD"); err != nil {
-			addArgs = append(addArgs, ":(exclude,literal)"+strings.TrimSuffix(name, "/"))
-			changes.Message = fmt.Sprintf("Some workspace files were omitted: reading nested repository %q: %v", name, err)
+		if reserveBase && ref == baseRef {
+			baseFound = true
+			continue
+		}
+		encoded, _ := json.Marshal(ref)
+		if len(changes.Branches) == branchLimit || branchListBytes+len(encoded)+1 > maxWorkspaceBranchListBytes {
+			changes.BranchesTruncated = true
+			continue
+		}
+		changes.Branches = append(changes.Branches, ref)
+		branchListBytes += len(encoded) + 1
+	}
+	if baseFound {
+		changes.Branches = append(changes.Branches, baseRef)
+		slices.Sort(changes.Branches)
+	}
+	base := head
+	if scope == workspaceChangesBranch {
+		changes.BaseRef = baseRef
+		if baseRef == "" {
+			changes.Message = "Choose a base branch to compare committed changes"
+			return changes, nil
+		}
+		if !baseFound {
+			return changes, fmt.Errorf("base branch %q is unavailable", baseRef)
+		}
+		if head == "" {
+			changes.Message = "No committed branch changes: HEAD has no commits"
+			return changes, nil
+		}
+		output, err := c.output(ctx, root, c.environment, "merge-base", baseRef, head)
+		if err != nil {
+			return changes, fmt.Errorf("finding merge base for branch %q: %w", baseRef, err)
+		}
+		base = strings.TrimSpace(string(output))
+	}
+	if base == "" {
+		output, err := c.output(ctx, root, c.environment, "hash-object", "-w", "-t", "tree", "--stdin")
+		if err != nil {
+			return changes, fmt.Errorf("creating empty workspace base: %w", err)
+		}
+		base = strings.TrimSpace(string(output))
+	}
+	changes.Base = base
+	environment := c.environment
+	if scope == workspaceChangesUncommitted {
+		dir, err := os.MkdirTemp(c.stateDir, "changes-")
+		if err != nil {
+			return changes, err
+		}
+		defer os.RemoveAll(dir)
+		index, err := filepath.Abs(filepath.Join(dir, "index"))
+		if err != nil {
+			return changes, err
+		}
+		environment = replaceProcessEnv(c.environment, "GIT_INDEX_FILE", index)
+		indexPath, err := c.output(ctx, root, c.environment, "rev-parse", "--git-path", "index")
+		if err != nil {
+			return changes, err
+		}
+		path := strings.TrimSpace(string(indexPath))
+		if !filepath.IsAbs(path) {
+			path = filepath.Join(root, path)
+		}
+		if data, err := os.ReadFile(path); err == nil {
+			if err := os.WriteFile(index, data, 0600); err != nil {
+				return changes, err
+			}
+		} else if errors.Is(err, os.ErrNotExist) {
+			if _, err := c.output(ctx, root, environment, "read-tree", "--empty"); err != nil {
+				return changes, err
+			}
+		} else {
+			return changes, err
+		}
+		output, err := c.output(ctx, root, environment, "ls-files", "--others", "--exclude-standard", "-z")
+		if err != nil {
+			return changes, fmt.Errorf("listing untracked workspace files: %w", err)
+		}
+		addArgs := []string{"add", "--intent-to-add", "--ignore-errors", "--", "."}
+		// Unborn nested repositories cannot be represented by a Git diff.
+		for _, name := range strings.Split(string(output), "\x00") {
+			if !strings.HasSuffix(name, "/") {
+				continue
+			}
+			if _, err := c.output(ctx, filepath.Join(root, name), c.environment, "rev-parse", "--verify", "HEAD"); err != nil {
+				addArgs = append(addArgs, ":(exclude,literal)"+strings.TrimSuffix(name, "/"))
+				changes.Message = fmt.Sprintf("Some workspace files were omitted: reading nested repository %q: %v", name, err)
+				changes.Truncated = true
+			}
+		}
+		// Intent-to-add includes untracked files without changing the user's index.
+		if _, err := c.output(ctx, root, environment, addArgs...); err != nil {
+			var exitError *exec.ExitError
+			if !errors.As(err, &exitError) || exitError.ExitCode() != 1 {
+				return changes, fmt.Errorf("collecting workspace files: %w", err)
+			}
+			changes.Message = "Some workspace files were omitted: " + err.Error()
 			changes.Truncated = true
 		}
 	}
-	// Intent-to-add includes untracked files without changing the user's index.
-	if _, err := c.output(ctx, root, environment, addArgs...); err != nil {
-		var exitError *exec.ExitError
-		if !errors.As(err, &exitError) || exitError.ExitCode() != 1 {
-			return changes, fmt.Errorf("collecting workspace files: %w", err)
-		}
-		changes.Message = "Some workspace files were omitted: " + err.Error()
-		changes.Truncated = true
-	}
 	args := []string{"diff", "--no-ext-diff", "--no-textconv", "--no-color", "--no-renames", "--src-prefix=a/", "--dst-prefix=b/", base}
+	if scope == workspaceChangesBranch {
+		args = append(args, head)
+	}
 	output, err = c.output(ctx, root, environment, append(args, "--name-only", "-z", "--")...)
 	if err != nil {
 		return changes, fmt.Errorf("listing workspace changes: %w", err)

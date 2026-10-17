@@ -278,9 +278,22 @@
             <h2>File changes</h2>
             <p id="changes-summary">No changed files</p>
           </div>
+          <div class="changes-controls">
+            <label>Show
+              <select id="changes-scope">
+                <option value="uncommitted">Uncommitted</option>
+                <option value="branch">Branch changes</option>
+              </select>
+            </label>
+            <label id="changes-base-label" hidden>Base branch
+              <select id="changes-base">
+                <option value="">Select base branch</option>
+              </select>
+            </label>
+          </div>
         </header>
         <div class="changes-list" id="changes-list" aria-live="polite">
-          <div class="changes-empty">No file changes yet.</div>
+          <div class="changes-empty">No uncommitted changes.</div>
         </div>
       </section>
 
