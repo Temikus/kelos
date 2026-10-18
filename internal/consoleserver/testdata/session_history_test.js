@@ -202,6 +202,10 @@ function resetHarness() {
     jumpToLatest: new TestNode('button'),
     sessionsView: new TestNode('main'),
     composerHint: new TestNode('span'),
+    composer: new TestNode('form'),
+    composerWrap: new TestNode('div'),
+    composerHighlight: new TestNode('div'),
+    composerCommandHelp: new TestNode('div'),
     input: new TestNode('textarea'),
     attachFiles: new TestNode('button'),
     promptsButton: new TestNode('button'),
@@ -221,6 +225,8 @@ function resetHarness() {
     terminalTab: new TestNode('button'),
     terminalView: new TestNode('section'),
     viewChoice: new TestNode('select'),
+    viewPicker: new TestNode('div'),
+    changes: new TestNode('section'),
     terminalChoice: new TestNode('option'),
     suspendButton: new TestNode('button'),
     resumeButton: new TestNode('button'),
@@ -900,7 +906,223 @@ function testComposerLabelsPendingSubmission() {
 
   elements.input.value = '/goal pause';
   updateComposerAction();
-  assert.equal(elements.composerHint.textContent, 'Enter to run goal command · Shift+Enter for a new line · !COMMAND · /goal');
+  assert.equal(elements.composerHint.textContent, 'Enter to pause goal · Shift+Enter for a new line · !COMMAND · /goal');
+}
+
+function testComposerRecognizesCommands() {
+  const cases = [
+    ['Explain this code', 'message', 'Message', 'Send'],
+    ['/review', 'message', 'Message', 'Send'],
+    ['/goals', 'message', 'Message', 'Send'],
+    ['/goalkeeper', 'message', 'Message', 'Send'],
+    ['!make test', 'shell', 'Shell command', 'Run command'],
+    ['  ! make test\n', 'shell', 'Shell command', 'Run command'],
+    ['\ufeff!make test', 'shell', 'Shell command', 'Run command'],
+    ['\ufeff/goal pause', 'goal', 'Goal command', 'Pause goal'],
+    ['\u0085\ufeff!pwd', 'message', 'Message', 'Send'],
+    ['![diagram](image.png)', 'shell', 'Shell command', 'Run command'],
+    ['/goal', 'goal', 'Goal command', 'Show goal'],
+    ['/goal improve coverage', 'goal', 'Goal command', 'Start goal'],
+    ['/goal\nimprove coverage', 'goal', 'Goal command', 'Start goal'],
+    ['\u0085/goal\u0085pause\u0085', 'goal', 'Goal command', 'Pause goal'],
+    ['/goal edit improve tests', 'goal', 'Goal command', 'Edit goal'],
+    ['/goal pause', 'goal', 'Goal command', 'Pause goal'],
+    ['/goal resume', 'goal', 'Goal command', 'Resume goal'],
+    ['/goal clear', 'goal', 'Goal command', 'Clear goal'],
+    ['/goal clear tech debt', 'goal', 'Goal command', 'Start goal'],
+  ];
+  for (const [text, kind, label, action] of cases) {
+    resetHarness();
+    state.selected = {namespace: 'default', name: 'one', provider: 'codex'};
+    state.socket = {readyState: WebSocket.OPEN};
+    elements.input.value = text;
+    updateComposerAction();
+    assert.equal(elements.composerHighlight.hidden, kind === 'message', text);
+    assert.equal(elements.composer.dataset.command, kind, text);
+    assert.equal(elements.input.attributes.get('aria-label'), label, text);
+    assert.equal(elements.send.attributes.get('aria-label'), kind === 'message' ? 'Send message' : action, text);
+    assert.equal(elements.send.disabled, false, text);
+    if (kind !== 'message') assert.equal(elements.send.textContent, action, text);
+  }
+  elements.input.value = 'ordinary message';
+  updateComposerAction();
+  assert.equal(elements.composerHighlight.hidden, true);
+  assert.equal(elements.composerHighlight.hasChildNodes(), false);
+  assert.equal(elements.composerCommandHelp.hidden, true);
+  assert.equal(elements.send.dataset.action, 'send');
+  assert.equal(elements.send.textContent, '↑');
+
+  elements.input.value = '!make test';
+  state.activeTurn = true;
+  updateComposerAction();
+  assert.equal(elements.send.textContent, 'Queue command');
+  assert.equal(elements.composerCommandHelp.textContent, 'Runs directly in the Session workspace');
+
+  state.activeTurn = false;
+  window.matchMedia = () => ({matches: true});
+  updateComposerAction();
+  assert.equal(elements.composerHighlight.hidden, false);
+  assert.equal(elements.composerHint.textContent, 'Tap Run command · Return for a new line');
+  window.matchMedia = () => ({matches: false});
+}
+
+function testComposerHighlightsCommandText() {
+  resetHarness();
+  state.selected = {namespace: 'default', name: 'one', provider: 'codex'};
+  state.socket = {readyState: WebSocket.OPEN};
+  for (const [text, prefix] of [
+    ['!make test', '!make'],
+    ['  ! make test', '! make'],
+    ['\ufeff!make test', '!make'],
+    ['\ufeff/goal pause', '/goal pause'],
+    ['/goal pause', '/goal pause'],
+    ['/goal clear tech debt', '/goal'],
+    ['/goal edit improve coverage', '/goal edit'],
+    ["!printf '<script>alert(1)</script>'", '!printf'],
+    ['/goal\nimprove tests\n', '/goal'],
+  ]) {
+    elements.input.value = text;
+    updateComposerAction();
+    assert.equal(elements.composerHighlight.querySelector('mark').textContent, prefix, text);
+    assert.equal(elements.composerHighlight.textContent, text + '\u200b', text);
+    assert.equal(elements.composerHighlight.querySelector('script'), null);
+    assert.equal(elements.input.value, text);
+  }
+  elements.input.scrollTop = 48;
+  elements.input.scrollLeft = 10;
+  elements.input.clientWidth = 360;
+  syncComposerHighlight();
+  assert.equal(elements.composerHighlight.scrollTop, 48);
+  assert.equal(elements.composerHighlight.scrollLeft, 10);
+  assert.equal(elements.composerHighlight.style.width, '360px');
+
+  elements.input.disabled = true;
+  updateComposerAction();
+  assert.equal(elements.composer.dataset.command, 'message');
+  assert.equal(elements.composerHighlight.hidden, true);
+}
+
+function testComposerHighlightEvents() {
+  resetHarness();
+  let width = 360;
+  let height = 220;
+  Object.defineProperty(elements.input, 'clientWidth', {get: () => elements.composerWrap.hidden ? 0 : width});
+  Object.defineProperty(elements.input, 'scrollHeight', {get: () => elements.composerWrap.hidden ? 0 : height});
+  const context = vm.createContext({
+    elements, state,
+    window: new TestNode('window'),
+    requestWorkspaceChanges() {},
+    updateCurrentRequest() {},
+    hideCurrentRequest() {},
+    updateJumpToLatest() {},
+    scheduleCompletionRead() {},
+    closeSessionActionsMenu() {},
+    scheduleCurrentRequestUpdate() {},
+    sessionTerminal: {show() {}},
+  });
+  vm.runInContext(applicationSlice('function syncComposerHighlight', 'function renderComposerCommand'), context);
+  vm.runInContext(applicationSlice('function setActiveView', 'function handleViewTabKeydown'), context);
+  vm.runInContext(applicationSlice("elements.input.addEventListener('keydown'", 'async function openDialog'), context);
+  vm.runInContext(applicationSlice("window.addEventListener('resize', () => {", "document.addEventListener('pointerdown'"), context);
+  for (const tab of ['changes', 'terminal']) {
+    context.setActiveView('conversation');
+    assert.equal(elements.composerHighlight.style.width, `${width}px`);
+    assert.equal(elements.input.style.height, `${Math.min(height, 160)}px`);
+    context.setActiveView(tab);
+    width += 80;
+    height = 100;
+    context.window.listeners.get('resize')();
+    context.syncComposerHighlight();
+    assert.notEqual(elements.composerHighlight.style.width, '0px');
+    assert.notEqual(elements.input.style.height, '0px');
+    context.setActiveView('conversation');
+    assert.equal(elements.composerHighlight.style.width, `${width}px`);
+    assert.equal(elements.input.style.height, '100px');
+  }
+  elements.input.scrollTop = 48;
+  elements.input.scrollLeft = 10;
+  elements.input.listeners.get('scroll')();
+  assert.equal(elements.composerHighlight.scrollTop, 48);
+  assert.equal(elements.composerHighlight.scrollLeft, 10);
+  width = 600;
+  context.window.listeners.get('resize')();
+  assert.equal(elements.composerHighlight.style.width, '600px');
+}
+
+async function testComposerCommandSubmission() {
+  resetHarness();
+  state.selected = {namespace: 'default', name: 'one', uid: 'uid-one', provider: 'codex'};
+  const sent = [];
+  state.socket = {readyState: WebSocket.OPEN, send: message => sent.push(JSON.parse(message))};
+  for (const [text, provider, detail] of [
+    ['!', 'codex', 'Enter a command after !'],
+    ['/goal edit', 'codex', 'Enter an objective after /goal edit'],
+    ['/goal pause', 'claude-code', '/goal is available only in Codex Sessions'],
+    ['\ufeff/goal pause', 'claude-code', '/goal is available only in Codex Sessions'],
+    ['\ufeff!', 'codex', 'Enter a command after !'],
+  ]) {
+    state.selected.provider = provider;
+    elements.input.value = text;
+    updateComposerAction();
+    assert.equal(elements.composer.dataset.invalid, 'true');
+    assert.equal(elements.composerCommandHelp.textContent, detail);
+    assert.equal(elements.send.disabled, true);
+    assert.equal(elements.composerHint.textContent, detail);
+    window.matchMedia = () => ({matches: true});
+    updateComposerAction();
+    assert.equal(elements.composerHint.textContent, detail);
+    window.matchMedia = () => ({matches: false});
+    await submitComposer();
+    assert.equal(elements.input.value, text);
+  }
+  assert.deepEqual(sent, []);
+
+  state.selected.provider = 'codex';
+  state.pendingMessage = {event: {turnId: 'turn-2'}};
+  for (const active of [false, true]) {
+    state.activeTurn = active;
+    for (const text of ['!pwd', '/goal pause']) {
+      if (active && text.startsWith('/goal')) continue;
+      elements.input.value = text;
+      updateComposerAction();
+      assert.equal(elements.send.disabled, true);
+      assert.equal(elements.composerCommandHelp.textContent, 'Wait for pending work to start or remove it before submitting a command');
+      await submitComposer();
+      assert.equal(elements.input.value, text);
+    }
+  }
+  assert.deepEqual(sent, []);
+  state.pendingMessage = null;
+  state.activeTurn = false;
+
+  state.selected.provider = 'codex';
+  for (const text of ['!make test', '/goal improve coverage', '\ufeff!pwd']) {
+    elements.input.value = text;
+    updateComposerAction();
+    assert.equal(elements.send.disabled, false);
+    await submitComposer();
+  }
+  assert.deepEqual(sent, [
+    {type: 'message', text: '!make test', attachmentIds: []},
+    {type: 'message', text: '/goal improve coverage', attachmentIds: []},
+    {type: 'message', text: '!pwd', attachmentIds: []},
+  ]);
+}
+
+function testComposerCommandsRejectAttachments() {
+  resetHarness();
+  state.selected = {namespace: 'default', name: 'one', uid: 'uid-one', provider: 'codex'};
+  state.socket = {readyState: WebSocket.OPEN};
+  state.attachmentDrafts.set(sessionKey(state.selected), [{name: 'file.txt'}]);
+  for (const text of ['!make test', '/goal improve coverage']) {
+    elements.input.value = text;
+    updateComposerAction();
+    assert.equal(elements.composerCommandHelp.textContent, 'Remove attachments to use a command');
+    assert.equal(elements.send.disabled, true);
+  }
+  state.attachmentDrafts.clear();
+  updateComposerAction();
+  assert.equal(elements.send.disabled, false);
 }
 
 function testPendingSessionComposerAllowsDraft() {
@@ -1975,6 +2197,10 @@ testBackgroundTaskProgress();
 testSessionProgressRequiresReadyRuntime();
 testComposerInterruptsWhileInputIsDisabled();
 testComposerLabelsPendingSubmission();
+testComposerRecognizesCommands();
+testComposerHighlightsCommandText();
+testComposerHighlightEvents();
+testComposerCommandsRejectAttachments();
 testPendingSessionComposerAllowsDraft();
 testFailedSessionComposerRejectsDraft();
 testSessionViewPickerAvailability();
@@ -2023,6 +2249,7 @@ testPromptJumpUnavailableAndPageError();
 testReadySessionDisconnectsWhenItBecomesPending()
   .then(testSuspendSessionHidesBackgroundProgress)
   .then(testComposerIgnoresReentrantSubmission)
+  .then(testComposerCommandSubmission)
   .then(testPromptHistoryBrowseAndReuse)
   .then(() => process.stdout.write('Session history tests passed\n'))
   .catch(error => {

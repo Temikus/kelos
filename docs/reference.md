@@ -398,8 +398,17 @@ names, and the web client provides authenticated previews or downloads while
 the Session is ready.
 
 Both terminal and web chat recognize `!COMMAND` and `/goal` before ordinary
-messages are submitted. `!COMMAND` runs `/bin/sh -lc COMMAND` directly in the
-Session working directory with the Session environment. It does not ask the
+messages are submitted. The web and interactive terminal composers identify
+shell and goal commands as you type and show the submit action.
+The web composer highlights the command prefix and uses distinct shell and goal
+styling. It labels the submit button; touch clients use this button and reserve
+Return for a new line. Both composers explain incomplete commands, unavailable
+goal commands, and commands blocked by staged attachments or pending work, and
+prevent their submission until the problem is resolved. Removing the command
+prefix restores the ordinary message composer.
+
+`!COMMAND` runs `/bin/sh -lc COMMAND` directly in the Session working directory
+with the Session environment. It does not ask the
 agent for approval or start a model turn. The command, exit code, duration, and
 retained output are added to the agent conversation context for subsequent
 turns. Claude Code includes pending command results with the next ordinary

@@ -508,6 +508,8 @@ const elements = requireElements({
   pendingAttachments: document.querySelector('#pending-attachments'),
   send: document.querySelector('#send-message'),
   composerHint: document.querySelector('#composer-hint'),
+  composerHighlight: document.querySelector('#composer-highlight'),
+  composerCommandHelp: document.querySelector('#composer-command-help'),
   runtimeStatus: document.querySelector('#session-runtime-status'),
   progress: document.querySelector('#session-progress'),
   progressLabel: document.querySelector('#session-progress-label'),
@@ -993,7 +995,10 @@ function setConsoleView(view: string) {
     else button.removeAttribute('aria-current');
   }
   if (state.consoleView === 'sessions' && !state.selected && state.sessions.length) selectSession(state.sessions[0]);
-  if (state.consoleView === 'sessions') updateCurrentRequest();
+  if (state.consoleView === 'sessions') {
+    resizeComposer();
+    updateCurrentRequest();
+  }
   if (state.consoleView === 'admin') void loadAdmin();
   updateJumpToLatest();
   setSidebarOpen(false);
@@ -3847,23 +3852,112 @@ function composerInterruptAction() {
   return state.activeTurn && (elements.input.disabled || (!elements.input.value.trim() && currentAttachmentFiles().length === 0));
 }
 
+function composerCommand() {
+  const text = elements.input.value.trim().replace(/^\p{White_Space}+|\p{White_Space}+$/gu, '');
+  let kind = 'message';
+  let prefix = '';
+  let action = 'Send';
+  let detail = '';
+  let invalid = false;
+  if (text.startsWith('!')) {
+    kind = 'shell';
+    prefix = text.match(/^!\p{White_Space}*[^\p{White_Space}]*/u)![0];
+    action = state.activeTurn ? 'Queue command' : 'Run command';
+    invalid = !text.slice(1).match(/[^\p{White_Space}]/u);
+    detail = invalid ? 'Enter a command after !' : 'Runs directly in the Session workspace';
+  } else if (/^\/goal(?:\p{White_Space}|$)/u.test(text)) {
+    kind = 'goal';
+    prefix = '/goal';
+    const args = text.match(/[^\p{White_Space}]+/gu)!.slice(1);
+    action = args.length === 0 ? 'Show goal' : 'Start goal';
+    if (args[0] === 'edit') {
+      action = 'Edit goal';
+      invalid = args.length === 1;
+    } else if (args.length === 1 && ['pause', 'resume', 'clear'].includes(args[0])) {
+      action = `${args[0][0].toUpperCase()}${args[0].slice(1)} goal`;
+    }
+    if (args.length > 0 && action !== 'Start goal') {
+      prefix = text.match(/^\/goal\p{White_Space}+[^\p{White_Space}]+/u)![0];
+    }
+    const descriptions: Record<string, string> = {
+      'Show goal': 'View the current objective and status',
+      'Start goal': 'Start an objective with automatic continuation',
+      'Edit goal': 'Update the current objective',
+      'Pause goal': 'Finish the current turn, then pause automatic continuation',
+      'Resume goal': 'Resume automatic continuation',
+      'Clear goal': 'Remove the current goal',
+    };
+    detail = invalid ? 'Enter an objective after /goal edit' : descriptions[action];
+    if (state.selected && state.selected.provider !== 'codex') {
+      invalid = true;
+      detail = '/goal is available only in Codex Sessions';
+    }
+  }
+  if (kind !== 'message' && currentAttachmentFiles().length > 0) {
+    invalid = true;
+    detail = 'Remove attachments to use a command';
+  }
+  if (state.pendingMessage && (kind === 'shell' || kind === 'goal' && !state.activeTurn)) {
+    invalid = true;
+    detail = 'Wait for pending work to start or remove it before submitting a command';
+  }
+  return {kind, prefix, action, detail, invalid};
+}
+
+function syncComposerHighlight() {
+  if (elements.composerWrap.hidden || elements.sessionsView.hidden) return;
+  elements.composerHighlight.style.width = `${elements.input.clientWidth}px`;
+  elements.composerHighlight.scrollTop = elements.input.scrollTop;
+  elements.composerHighlight.scrollLeft = elements.input.scrollLeft;
+}
+
+function renderComposerCommand(command: ReturnType<typeof composerCommand>, interrupt: boolean) {
+  const kind = elements.input.disabled || interrupt ? 'message' : command.kind;
+  const changed = elements.composer.dataset.command !== kind;
+  elements.composer.dataset.command = kind;
+  elements.composer.dataset.invalid = String(command.invalid);
+  elements.input.setAttribute('aria-label', kind === 'shell' ? 'Shell command' : kind === 'goal' ? 'Goal command' : 'Message');
+  elements.composerCommandHelp.hidden = kind === 'message';
+  if (elements.composerCommandHelp.textContent !== command.detail) elements.composerCommandHelp.textContent = command.detail;
+  elements.composerHighlight.hidden = kind === 'message';
+  if (kind === 'message') {
+    elements.composerHighlight.replaceChildren();
+  } else {
+    const text = elements.input.value;
+    const leading = text.slice(0, text.indexOf(command.prefix));
+    const prefix = document.createElement('mark');
+    prefix.textContent = command.prefix;
+    elements.composerHighlight.replaceChildren(
+      document.createTextNode(leading),
+      prefix,
+      document.createTextNode(text.slice(leading.length + command.prefix.length) + '\u200b'),
+    );
+  }
+  if (changed) resizeComposer();
+  syncComposerHighlight();
+}
+
 function updateComposerAction() {
   const connected = state.socket && state.socket.readyState === WebSocket.OPEN;
   elements.promptsButton.disabled = !connected;
   const interrupt = composerInterruptAction();
-  const goalControl = state.activeTurn && /^\/goal(?:\s|$)/.test(elements.input.value.trim());
+  const command = composerCommand();
+  renderComposerCommand(command, interrupt);
   let action = 'send';
   if (interrupt) action = 'interrupt';
-  else if (goalControl) action = 'run goal command';
+  else if (command.kind !== 'message') action = command.action.toLowerCase();
   else if (state.activeTurn || state.pendingMessage) action = 'add to pending';
   const actionSymbol = interrupt ? '■' : '↑';
-  elements.send.dataset.action = interrupt ? 'interrupt' : 'send';
-  elements.send.textContent = actionSymbol;
-  elements.send.setAttribute('aria-label', interrupt ? 'Interrupt active work' : 'Send message');
-  elements.send.title = interrupt ? 'Interrupt active work' : 'Send message';
-  elements.send.disabled = !connected || state.sendingMessage || (interrupt ? state.interrupting : elements.input.disabled);
-  elements.composerHint.textContent = usesTouchComposer()
-    ? `Tap ${actionSymbol} to ${action} · Return for a new line · !COMMAND · /goal`
+  const buttonLabel = interrupt ? 'Interrupt active work' : command.kind === 'message' ? 'Send message' : command.action;
+  elements.send.dataset.action = interrupt ? 'interrupt' : command.kind === 'message' ? 'send' : 'command';
+  elements.send.textContent = !interrupt && command.kind !== 'message' ? command.action : actionSymbol;
+  elements.send.setAttribute('aria-label', buttonLabel);
+  elements.send.title = buttonLabel;
+  elements.send.disabled = !connected || state.sendingMessage || (interrupt ? state.interrupting : elements.input.disabled || command.invalid);
+  elements.composerHint.textContent = !interrupt && command.invalid ? command.detail : usesTouchComposer()
+    ? (!interrupt && command.kind !== 'message'
+      ? `Tap ${command.action} · Return for a new line`
+      : `Tap ${actionSymbol} to ${action} · Return for a new line · !COMMAND · /goal`)
     : (interrupt && elements.input.disabled
       ? `Click ${actionSymbol} to interrupt`
       : `Enter to ${action} · Shift+Enter for a new line · !COMMAND · /goal`);
@@ -5260,6 +5354,7 @@ function renderPendingMessageContent(pending) {
   remove.setAttribute('aria-label', 'Remove pending message');
   remove.addEventListener('click', () => removePendingUser(pending.event.turnId));
   pending.actions.append(status, edit, remove);
+  updateComposerAction();
 }
 
 function removePendingUser(turnID) {
@@ -5964,8 +6059,10 @@ function setActiveView(view) {
     tab.setAttribute('aria-selected', String(active));
     tab.tabIndex = active ? 0 : -1;
   }
-  if (conversationActive) updateCurrentRequest();
-  else hideCurrentRequest();
+  if (conversationActive) {
+    resizeComposer();
+    updateCurrentRequest();
+  } else hideCurrentRequest();
   updateJumpToLatest();
   if (terminalActive) sessionTerminal.show(state.selected);
   scheduleCompletionRead();
@@ -6181,6 +6278,7 @@ async function submitComposer() {
     interruptActiveTurn();
     return;
   }
+  if (composerCommand().invalid) return;
   const session = state.selected;
   const files = [...currentAttachmentFiles()];
   if (!session) return;
@@ -6251,10 +6349,13 @@ elements.input.addEventListener('input', () => {
   resizeComposer();
   updateComposerAction();
 });
+elements.input.addEventListener('scroll', syncComposerHighlight);
 
 function resizeComposer() {
+  if (elements.composerWrap.hidden || elements.sessionsView.hidden) return;
   elements.input.style.height = 'auto';
   elements.input.style.height = `${Math.min(elements.input.scrollHeight, 160)}px`;
+  syncComposerHighlight();
 }
 
 async function openDialog() {
@@ -6755,6 +6856,7 @@ elements.closeSidebar.addEventListener('click', () => setSidebarOpen(false));
 elements.sidebarScrim.addEventListener('click', () => setSidebarOpen(false));
 elements.sidebarScroll.addEventListener('scroll', () => closeSessionActionsMenu());
 window.addEventListener('resize', () => {
+  resizeComposer();
   closeSessionActionsMenu();
   scheduleCurrentRequestUpdate();
   updateJumpToLatest();

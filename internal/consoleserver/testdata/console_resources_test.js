@@ -43,6 +43,7 @@ function testViewsWithoutNamespace() {
 
 function testReturningToSessionsRefreshesCurrentRequest() {
   let updates = 0;
+  let resizes = 0;
   const navigationButton = () => ({setAttribute() {}, removeAttribute() {}});
   global.state = {consoleView: 'overview', selected: {}, sessions: []};
   global.elements = {
@@ -57,6 +58,10 @@ function testReturningToSessionsRefreshesCurrentRequest() {
     adminButton: navigationButton(),
   };
   global.updateCurrentRequest = () => { updates++; };
+  global.resizeComposer = () => {
+    assert.equal(elements.sessionsView.hidden, false);
+    resizes++;
+  };
   global.updateJumpToLatest = () => {};
   global.setSidebarOpen = () => {};
 
@@ -64,6 +69,7 @@ function testReturningToSessionsRefreshesCurrentRequest() {
 
   assert.equal(elements.sessionsView.hidden, false);
   assert.equal(updates, 1);
+  assert.equal(resizes, 1);
 }
 
 function testResourceInventorySupportsAllTypesAndSearch() {
