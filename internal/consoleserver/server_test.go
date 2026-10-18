@@ -1577,7 +1577,7 @@ func TestSessionComposerAllowsMultilinePromptsOnTouchDevices(t *testing.T) {
 	javascript := string(source)
 	for description, expected := range map[string]string{
 		"touch device detection":  `window.matchMedia('(pointer: coarse)').matches`,
-		"touch composer hint":     "? `Tap ${actionSymbol} to ${action} · Return for a new line · !COMMAND · /goal`",
+		"touch composer hint":     "`Tap ${actionSymbol} to ${action} · Return for a new line · !COMMAND · /goal`",
 		"desktop composer hint":   "`Enter to ${action} · Shift+Enter for a new line · !COMMAND · /goal`",
 		"disabled interrupt hint": "`Click ${actionSymbol} to interrupt`",
 		"desktop-only Enter send": `!event.isComposing && !usesTouchComposer()`,
@@ -1665,8 +1665,8 @@ func TestSessionUIAdaptsToPhoneViewport(t *testing.T) {
 		"phone prompt history touch target":  `.prompt-history-button, .prompt-history-heading button, #prompts-more { min-height: 44px;`,
 		"phone safe-area padding":            `env(safe-area-inset-bottom)`,
 		"non-zooming form fields":            `.composer textarea, .pending-message-input, .yaml-panel textarea, .form-grid input`,
-		"desktop composer alignment":         `.composer textarea { width: 100%; min-height: 36px;`,
-		"mobile composer alignment":          `.composer textarea { min-height: 44px; padding: 10px 8px; line-height: 24px; }`,
+		"desktop composer alignment":         `.composer textarea, .composer-highlight { width: 100%; min-height: 36px;`,
+		"mobile composer alignment":          `.composer textarea, .composer-highlight { min-height: 44px; padding: 10px 8px; font-size: 16px; line-height: 24px; }`,
 		"phone-sized dialog":                 `max-height: calc(100dvh - 16px`,
 		"scrolling sidebar controls":         `.sidebar-scroll { flex: 1; min-height: 0; overflow-y: auto;`,
 	} {

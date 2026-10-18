@@ -315,7 +315,11 @@
         <div class="pending-attachments" id="pending-attachments" aria-label="Files ready to attach" hidden></div>
         <form class="composer" id="composer">
           <input id="attachment-input" type="file" multiple hidden>
-          <textarea id="message-input" rows="1" placeholder="Choose a ready session to start chatting" aria-label="Message" disabled></textarea>
+          <div class="composer-editor">
+            <div class="composer-highlight" id="composer-highlight" aria-hidden="true" hidden></div>
+            <textarea id="message-input" rows="1" placeholder="Choose a ready session to start chatting" aria-label="Message" aria-describedby="composer-command-help" disabled></textarea>
+          </div>
+          <div class="composer-command-help" id="composer-command-help" role="status" aria-live="polite" hidden></div>
           <div class="composer-actions">
             <button class="attach-button" id="attach-files" type="button" aria-label="Attach files" title="Attach files" disabled>＋</button>
             <button class="prompt-history-button" id="session-prompts" type="button" aria-haspopup="dialog" aria-controls="prompts-dialog" disabled>
