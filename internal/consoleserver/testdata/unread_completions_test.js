@@ -46,7 +46,7 @@ function harness(receipts = new Map()) {
     },
     window: {requestAnimationFrame: callback => frames.push(callback)},
     elements: {
-      messages: new Node(), sidebar: new Node(), sessionsUnreadCount: new Node(), sessionsButton: new Node(),
+      messages: new Node(), sidebar: new Node(), sessionsAttentionCount: new Node(), sessionsButton: new Node(),
     },
     state: {
       namespace: 'default', namespaceGeneration: 0, sessionListGeneration: 0, consoleView: 'sessions',
@@ -78,7 +78,7 @@ function harness(receipts = new Map()) {
 
 function completion(id = 'result-1', type = 'TurnCompleted', overrides = {}) {
   return {
-    name: 'session', namespace: 'default', uid: 'uid-1', provider: 'codex',
+    name: 'session', namespace: 'default', uid: 'uid-1', provider: 'codex', phase: 'Ready',
     lastNotification: {id, type}, ...overrides,
   };
 }
@@ -103,24 +103,62 @@ function showResult(h, session, id = session.lastNotification.id) {
   assert.equal(h.hasUnreadCompletion(completion('input', 'InputRequested')), false);
   assert.equal(h.hasUnreadCompletion(completion('reset', 'TurnCompleted', {resetting: true})), false);
   assert.equal(h.hasUnreadCompletion(completion('none', 'TurnCompleted', {lastNotification: undefined})), false);
-  for (const [type, label] of [['TurnCompleted', 'Completed · Unread'], ['TurnFailed', 'Failed · Unread']]) {
+  for (const [type, label] of [
+    ['TurnCompleted', 'Completed · Unread'], ['TurnFailed', 'Failed · Unread'], ['InputRequested', 'Input requested'],
+  ]) {
     const row = h.createSessionListItem(completion(type, type));
-    assert.equal(row.classList.contains('unread'), true);
-    assert.equal(row.querySelectorAll('.session-unread-label')[0].textContent, label);
-    assert.equal(row.querySelectorAll('.session-unread-dot')[0].attributes['aria-hidden'], 'true');
+    assert.equal(row.classList.contains('needs-attention'), true);
+    assert.equal(row.querySelectorAll('.session-attention-label')[0].textContent, label);
+    assert.equal(row.querySelectorAll('.session-attention-dot')[0].attributes['aria-hidden'], 'true');
     assert.equal(row.querySelectorAll('.phase-dot')[0].className, 'phase-dot idle');
   }
-  h.state.sessions = [completion(), completion('failed', 'TurnFailed'), completion('input', 'InputRequested')];
-  h.renderUnreadCount();
-  assert.equal(h.elements.sessionsUnreadCount.textContent, '2');
-  assert.equal(h.elements.sessionsUnreadCount.hidden, false);
-  assert.equal(h.elements.sessionsButton.attributes['aria-label'], 'Sessions, 2 unread results in default');
+  h.state.sessions = [
+    completion(), completion('failed', 'TurnFailed'), completion('input', 'InputRequested'),
+    completion('read', 'TurnCompleted', {readNotificationId: 'read'}),
+    completion('reset', 'InputRequested', {resetting: true}),
+  ];
+  h.renderSessionAttentionCount();
+  assert.equal(h.elements.sessionsAttentionCount.textContent, '3');
+  assert.equal(h.elements.sessionsAttentionCount.hidden, false);
+  assert.equal(h.elements.sessionsButton.attributes['aria-label'], 'Sessions, 3 needing attention in default');
   h.state.sessions = [completion()];
-  h.renderUnreadCount();
-  assert.equal(h.elements.sessionsButton.attributes['aria-label'], 'Sessions, 1 unread result in default');
+  h.renderSessionAttentionCount();
+  assert.equal(h.elements.sessionsButton.attributes['aria-label'], 'Sessions, 1 needing attention in default');
   h.state.sessions = [];
-  h.renderUnreadCount();
-  assert.equal(h.elements.sessionsUnreadCount.hidden, true);
+  h.renderSessionAttentionCount();
+  assert.equal(h.elements.sessionsAttentionCount.hidden, true);
+  assert.equal(h.elements.sessionsButton.attributes['aria-label'], 'Sessions');
+}
+
+{
+  const h = harness();
+  showResult(h, completion());
+  const input = h.refresh(completion('input', 'InputRequested'));
+  h.state.selected = input;
+  h.markVisibleCompletionRead();
+  await new Promise(setImmediate);
+  assert.equal(h.requests.length, 0, 'viewing an input request does not acknowledge it as a completion');
+  assert.equal(h.createSessionListItem(input).querySelectorAll('.session-attention-label')[0].textContent, 'Input requested');
+  h.renderSessionAttentionCount();
+  assert.equal(h.elements.sessionsAttentionCount.textContent, '1');
+  assert.equal(h.elements.sessionsAttentionCount.hidden, false);
+  for (const session of [
+    {...input, lastNotification: undefined},
+    {...input, resetting: true},
+    {...input, userSuspended: true},
+    {...input, phase: 'Suspended'},
+    {...input, phase: 'Failed'},
+    {...input, phase: 'Pending'},
+    {...input, phase: undefined},
+  ]) {
+    const current = h.refresh(session);
+    const row = h.createSessionListItem(current);
+    assert.equal(row.classList.contains('needs-attention'), false);
+    assert.equal(row.querySelectorAll('.session-attention-label').length, 0);
+    assert.equal(row.querySelectorAll('.session-attention-dot').length, 0);
+    h.renderSessionAttentionCount();
+    assert.equal(h.elements.sessionsAttentionCount.hidden, true, 'unavailable input requests do not need attention');
+  }
 }
 
 for (const [name, hide] of [
@@ -164,7 +202,7 @@ for (const [name, hide] of [
   assert.equal(h.hasUnreadCompletion(session), false);
   assert.equal(h.renders(), 1);
   assert.equal(h.state.sessionListGeneration, 1, 'responses to earlier list requests are invalidated');
-  assert.equal(h.createSessionListItem(session).querySelectorAll('.session-unread-label').length, 0);
+  assert.equal(h.createSessionListItem(session).querySelectorAll('.session-attention-label').length, 0);
   const otherBrowser = harness(h.receipts);
   assert.equal(otherBrowser.hasUnreadCompletion(otherBrowser.refresh(completion())), false, 'independent browser receives shared receipt');
   assert.equal(otherBrowser.hasUnreadCompletion(otherBrowser.refresh(completion('result-2'))), true, 'next result is unread');

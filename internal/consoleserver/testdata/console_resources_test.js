@@ -3,7 +3,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 
-global.renderUnreadCount = () => false;
+global.renderSessionAttentionCount = () => false;
 global.scheduleCompletionRead = () => false;
 
 const application = fs.readFileSync(path.join(__dirname, '..', 'web', 'app.js'), 'utf8');

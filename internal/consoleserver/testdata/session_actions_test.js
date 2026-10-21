@@ -105,7 +105,7 @@ global.window = {
   setTimeout,
 };
 
-global.hasUnreadCompletion = () => false;
+global.sessionAttentionLabel = () => '';
 
 const application = fs.readFileSync(path.join(__dirname, '..', 'web', 'app.js'), 'utf8');
 const index = fs.readFileSync(path.join(__dirname, '..', 'web', 'index.html'), 'utf8');
