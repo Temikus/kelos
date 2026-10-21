@@ -142,8 +142,8 @@ global.window = {
   setTimeout: callback => callback(),
 };
 
-global.hasUnreadCompletion = () => false;
-global.renderUnreadCount = () => false;
+global.sessionAttentionLabel = () => '';
+global.renderSessionAttentionCount = () => false;
 global.scheduleCompletionRead = () => false;
 
 const application = fs.readFileSync(path.join(__dirname, '..', 'web', 'app.js'), 'utf8');

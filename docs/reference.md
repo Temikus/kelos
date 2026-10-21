@@ -705,13 +705,16 @@ connect to Sessions across namespaces while operating on one active namespace
 at a time. Users can switch the active namespace live from the sidebar.
 `consoleServer.defaultNamespace` sets its initial value, and resource inventory,
 Session form options, and credential options are loaded only from the active namespace.
-Completed and failed results have a blue dot, bold Session title, and
+Sessions needing attention have a blue dot and bold title. Pending input requests
+show an **Input requested** label while the Session is Ready and has not been
+suspended by the user. Answering or cancelling the request clears its alert;
+opening the conversation does not. Completed and failed results show a
 **Completed · Unread** or **Failed · Unread** label until their turn ending is
 visible in the focused **Conversation** view. The **Sessions** navigation item
-counts unread results in the active namespace. These markers track the latest
-retained notification for each Session, independently of browser notifications;
-input requests and interrupted turns do not receive an unread completion marker.
-Read state is shared across browsers and devices for the same signed-in username.
+counts Sessions with input alerts or unread results in the active namespace.
+These markers track the latest retained notification for each Session,
+independently of browser notifications. Interrupted turns do not receive a marker.
+Completion read state is shared across browsers and devices for the same signed-in username.
 With token authentication, all users share the read state. Other browsers pick up
 acknowledgments on the next Session refresh, normally within five seconds. Clearing
 browser storage does not restore unread markers. If saving an acknowledgment

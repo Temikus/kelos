@@ -404,7 +404,7 @@ const elements = requireElements({
   sessionActionDelete: document.querySelector('#session-action-delete'),
   overviewButton: document.querySelector('#console-overview'),
   sessionsButton: document.querySelector('#console-sessions'),
-  sessionsUnreadCount: document.querySelector('#sessions-unread-count'),
+  sessionsAttentionCount: document.querySelector('#sessions-attention-count'),
   resourcesButton: document.querySelector('#console-resources'),
   adminButton: document.querySelector('#console-admin'),
   adminView: document.querySelector('#admin-view'),
@@ -1930,6 +1930,15 @@ function hasUnreadCompletion(session: SessionSummary) {
     ? session.readNotificationId !== notification.id : false;
 }
 
+function sessionAttentionLabel(session: SessionSummary) {
+  if (session.resetting) return '';
+  if (session.lastNotification?.type === 'InputRequested') {
+    return session.phase === 'Ready' && !session.userSuspended ? 'Input requested' : '';
+  }
+  if (!hasUnreadCompletion(session)) return '';
+  return session.lastNotification?.type === 'TurnFailed' ? 'Failed · Unread' : 'Completed · Unread';
+}
+
 function syncCompletionReads(sessions: SessionSummary[]) {
   const current = new Set(sessions.map(sessionViewKey));
   for (const reads of [pendingCompletionReads, rejectedCompletionReads]) {
@@ -1980,11 +1989,11 @@ async function saveCompletionRead(session: SessionSummary, notificationID: strin
   }
 }
 
-function renderUnreadCount() {
-  const count = state.sessions.filter(hasUnreadCompletion).length;
-  elements.sessionsUnreadCount.hidden = count === 0;
-  elements.sessionsUnreadCount.textContent = String(count);
-  elements.sessionsButton.setAttribute('aria-label', count ? `Sessions, ${count} unread ${count === 1 ? 'result' : 'results'} in ${state.namespace}` : 'Sessions');
+function renderSessionAttentionCount() {
+  const count = state.sessions.filter(sessionAttentionLabel).length;
+  elements.sessionsAttentionCount.hidden = count === 0;
+  elements.sessionsAttentionCount.textContent = String(count);
+  elements.sessionsButton.setAttribute('aria-label', count ? `Sessions, ${count} needing attention in ${state.namespace}` : 'Sessions');
 }
 
 function markVisibleCompletionRead() {
@@ -2529,7 +2538,7 @@ function createPullRequestLink(pullRequest: SessionPullRequest | undefined, clas
 }
 
 function renderSessions() {
-  renderUnreadCount();
+  renderSessionAttentionCount();
   scheduleCompletionRead();
   if (state.sessionActionKey) state.sessionActionTrigger = null;
   elements.list.replaceChildren();
@@ -2607,8 +2616,8 @@ function createSessionListItem(session: SessionSummary, draggable = false) {
   const key = sessionKey(session);
   const assigningSection = state.sectionAssignments.has(key);
   item.className = `session-item${state.selected && sessionKey(state.selected) === key ? ' active' : ''}${assigningSection ? ' section-saving' : ''}`;
-  const unread = hasUnreadCompletion(session);
-  if (unread) item.classList.add('unread');
+  const attentionLabel = sessionAttentionLabel(session);
+  if (attentionLabel) item.classList.add('needs-attention');
   const button = document.createElement('button');
   button.className = 'session-item-select';
   button.type = 'button';
@@ -2627,11 +2636,11 @@ function createSessionListItem(session: SessionSummary, draggable = false) {
   const recency = document.createElement('span');
   recency.className = 'session-item-recency';
   if (timestamp) recency.append(timestamp);
-  if (unread) {
-    const unreadDot = document.createElement('span');
-    unreadDot.className = 'session-unread-dot';
-    unreadDot.setAttribute('aria-hidden', 'true');
-    recency.append(unreadDot);
+  if (attentionLabel) {
+    const attentionDot = document.createElement('span');
+    attentionDot.className = 'session-attention-dot';
+    attentionDot.setAttribute('aria-hidden', 'true');
+    recency.append(attentionDot);
   }
   titleRow.append(recency);
   const meta = document.createElement('div');
@@ -2655,10 +2664,10 @@ function createSessionListItem(session: SessionSummary, draggable = false) {
   }
   meta.append(namespace, activity);
   text.append(titleRow, meta);
-  if (unread) {
+  if (attentionLabel) {
     const label = document.createElement('div');
-    label.className = 'session-unread-label';
-    label.textContent = session.lastNotification?.type === 'TurnFailed' ? 'Failed · Unread' : 'Completed · Unread';
+    label.className = 'session-attention-label';
+    label.textContent = attentionLabel;
     text.append(label);
   }
   if (session.branch) {
