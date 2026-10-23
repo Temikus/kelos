@@ -880,7 +880,7 @@ function testComposerInterruptsWhileInputIsDisabled() {
   assert.equal(elements.input.value, 'preserved draft');
   window.matchMedia = () => ({matches: true});
   updateComposerAction();
-  assert.equal(elements.composerHint.textContent, 'Tap ■ to interrupt · Return for a new line · !COMMAND · /goal');
+  assert.equal(elements.composerHint.textContent, 'Tap ■ to interrupt · Return for a new line · !COMMAND · /goal · /loop');
   window.matchMedia = () => ({matches: false});
 
   submitComposer();
@@ -902,11 +902,11 @@ function testComposerLabelsPendingSubmission() {
 
   updateComposerAction();
 
-  assert.equal(elements.composerHint.textContent, 'Enter to add to pending · Shift+Enter for a new line · !COMMAND · /goal');
+  assert.equal(elements.composerHint.textContent, 'Enter to add to pending · Shift+Enter for a new line · !COMMAND · /goal · /loop');
 
   elements.input.value = '/goal pause';
   updateComposerAction();
-  assert.equal(elements.composerHint.textContent, 'Enter to pause goal · Shift+Enter for a new line · !COMMAND · /goal');
+  assert.equal(elements.composerHint.textContent, 'Enter to pause goal · Shift+Enter for a new line · !COMMAND · /goal · /loop');
 }
 
 function testComposerRecognizesCommands() {
@@ -930,6 +930,12 @@ function testComposerRecognizesCommands() {
     ['/goal resume', 'goal', 'Goal command', 'Resume goal'],
     ['/goal clear', 'goal', 'Goal command', 'Clear goal'],
     ['/goal clear tech debt', 'goal', 'Goal command', 'Start goal'],
+    ['/loop', 'loop', 'Loop command', 'Show loop'],
+    ['/loop 5m Check CI', 'loop', 'Loop command', 'Start loop'],
+    ['/loop pause', 'loop', 'Loop command', 'Pause loop'],
+    ['/loop resume', 'loop', 'Loop command', 'Resume loop'],
+    ['/loop clear', 'loop', 'Loop command', 'Clear loop'],
+    ['/loops', 'message', 'Message', 'Send'],
   ];
   for (const [text, kind, label, action] of cases) {
     resetHarness();
@@ -1056,6 +1062,8 @@ async function testComposerCommandSubmission() {
   state.socket = {readyState: WebSocket.OPEN, send: message => sent.push(JSON.parse(message))};
   for (const [text, provider, detail] of [
     ['!', 'codex', 'Enter a command after !'],
+    ['/loop 5m', 'claude-code', 'Use /loop INTERVAL PROMPT with an interval of at least 1s (for example 5m)'],
+    ['/loop 0s Check CI', 'opencode', 'Use /loop INTERVAL PROMPT with an interval of at least 1s (for example 5m)'],
     ['/goal edit', 'codex', 'Enter an objective after /goal edit'],
     ['/goal pause', 'claude-code', '/goal is available only in Codex Sessions'],
     ['\ufeff/goal pause', 'claude-code', '/goal is available only in Codex Sessions'],
@@ -1096,7 +1104,7 @@ async function testComposerCommandSubmission() {
   state.activeTurn = false;
 
   state.selected.provider = 'codex';
-  for (const text of ['!make test', '/goal improve coverage', '\ufeff!pwd']) {
+  for (const text of ['!make test', '/goal improve coverage', '\ufeff!pwd', '/loop 5m Check CI']) {
     elements.input.value = text;
     updateComposerAction();
     assert.equal(elements.send.disabled, false);
@@ -1106,6 +1114,7 @@ async function testComposerCommandSubmission() {
     {type: 'message', text: '!make test', attachmentIds: []},
     {type: 'message', text: '/goal improve coverage', attachmentIds: []},
     {type: 'message', text: '!pwd', attachmentIds: []},
+    {type: 'message', text: '/loop 5m Check CI', attachmentIds: []},
   ]);
 }
 
@@ -1114,7 +1123,7 @@ function testComposerCommandsRejectAttachments() {
   state.selected = {namespace: 'default', name: 'one', uid: 'uid-one', provider: 'codex'};
   state.socket = {readyState: WebSocket.OPEN};
   state.attachmentDrafts.set(sessionKey(state.selected), [{name: 'file.txt'}]);
-  for (const text of ['!make test', '/goal improve coverage']) {
+  for (const text of ['!make test', '/goal improve coverage', '/loop 5m Check CI']) {
     elements.input.value = text;
     updateComposerAction();
     assert.equal(elements.composerCommandHelp.textContent, 'Remove attachments to use a command');
@@ -1619,6 +1628,14 @@ function testGoalRendering() {
   renderGoal({type: 'goal.updated', status: 'cleared'});
   const cards = elements.messages.querySelectorAll('.goal-card');
   assert.equal(cards[1].textContent, 'Goal cleared.');
+}
+
+function testLoopRendering() {
+  resetHarness();
+  handleEvent({type: 'loop.updated', loop: {prompt: 'Check CI', interval: '5m0s', status: 'active'}});
+  assert.equal(elements.messages.querySelector('.goal-card').textContent, 'Loop active · every 5m0sCheck CI');
+  handleEvent({type: 'loop.updated', status: 'cleared'});
+  assert.equal(elements.messages.querySelectorAll('.goal-card')[1].textContent, 'Loop cleared.');
 }
 
 function testToolOutputRenderingNormalizesCarriageReturns() {
@@ -2224,6 +2241,7 @@ testSessionTimestampElement();
 testToolOutputRendering();
 testToolOutputStreamsBeforeCompletion();
 testGoalRendering();
+testLoopRendering();
 testToolOutputRenderingNormalizesCarriageReturns();
 testHistoryToolCompletionRendersOutputWithoutStart();
 testUserAttachmentRendering();

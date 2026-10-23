@@ -23,6 +23,11 @@ command in the Session workspace. Codex Sessions also accept `/goal OBJECTIVE`;
 use `/goal` to inspect it and `/goal pause`, `/goal resume`, or `/goal clear` to
 control it.
 
+All supported agents accept `/loop 5m Check CI and address failures` to repeat a
+prompt when the Session is idle. Use `/loop` to inspect it and `/loop pause`,
+`/loop resume`, or `/loop clear` to control it. An active loop prevents automatic
+idle suspension and deletion; pause or clear it when recurring work is finished.
+
 When enabled, the Kelos Console's Sessions view provides the same conversation.
 Disconnecting either client does not stop the agent runtime. If the Pod or
 StatefulSet is removed, the controller recreates it on the Session-owned

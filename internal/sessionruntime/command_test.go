@@ -3,6 +3,7 @@ package sessionruntime
 import (
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestParseSessionCommand(t *testing.T) {
@@ -36,6 +37,44 @@ func TestParseSessionCommand(t *testing.T) {
 				t.Fatalf("parseSessionCommand(%q) = %#v", test.input, command)
 			}
 		})
+	}
+}
+
+func TestParseLoopCommand(t *testing.T) {
+	for _, test := range []struct {
+		input    string
+		action   string
+		interval time.Duration
+		prompt   string
+	}{
+		{input: "/loop", action: "show"},
+		{input: "/loop 5m Check CI", action: "create", interval: 5 * time.Minute, prompt: "Check CI"},
+		{input: "/loop 1h30m Review updates\nand report", action: "create", interval: 90 * time.Minute, prompt: "Review updates\nand report"},
+		{input: "\u00a0/loop\u00a01s\u00a0Check CI\u00a0", action: "create", interval: time.Second, prompt: "Check CI"},
+		{input: "/loop pause", action: "pause"},
+		{input: "/loop resume", action: "resume"},
+		{input: "/loop clear", action: "clear"},
+	} {
+		t.Run(test.input, func(t *testing.T) {
+			command, err := parseSessionCommand(test.input)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if command.kind != sessionCommandLoop || command.loop.action != test.action || command.loop.interval != test.interval || command.loop.prompt != test.prompt {
+				t.Fatalf("parseSessionCommand(%q) = %#v", test.input, command)
+			}
+		})
+	}
+	for _, input := range []string{"/loop 5m", "/loop 0s Check CI", "/loop -1s Check CI", "/loop 500ms Check CI", "/loop soon Check CI", "/loop pause extra", "/loop 999999999999h Check CI"} {
+		if _, err := parseSessionCommand(input); err == nil {
+			t.Errorf("parseSessionCommand(%q) succeeded", input)
+		}
+	}
+	for _, input := range []string{"/loops", "/looping"} {
+		command, err := parseSessionCommand(input)
+		if err != nil || command.kind != sessionCommandMessage {
+			t.Errorf("parseSessionCommand(%q) = %#v, %v", input, command, err)
+		}
 	}
 }
 

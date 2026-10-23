@@ -137,6 +137,9 @@ type Server struct {
 	recoveredGoalTurn  *turnRequest
 	interruptTimeout   time.Duration
 	pendingInputCount  atomic.Int64
+	loopMu             sync.Mutex
+	loopWakeups        chan struct{}
+	loopActive         atomic.Bool
 
 	runtimeStatusMu             sync.RWMutex
 	runtimeStatus               RuntimeStatus
@@ -179,6 +182,7 @@ func NewServer(config Config, journal *Journal, provider Provider) *Server {
 		workspaceStatusRefreshes:             make(chan struct{}, 1),
 		sessionStatusPublishWakeups:          make(chan struct{}, 1),
 		providerStop:                         make(chan struct{}),
+		loopWakeups:                          make(chan struct{}, 1),
 		interruptTimeout:                     defaultInterruptTimeout,
 		workspaceStatusRefreshInterval:       defaultWorkspaceStatusRefreshInterval,
 		activeWorkspaceStatusRefreshInterval: defaultActiveWorkspaceStatusRefreshInterval,
@@ -376,6 +380,9 @@ func (s *Server) Serve(ctx context.Context) error {
 		s.journal.Close()
 		_ = os.Remove(s.config.SocketPath)
 	}()
+	if err := s.initializeLoop(); err != nil {
+		return err
+	}
 	if err := s.initializeSessionUpdate(serveCtx); err != nil {
 		return err
 	}
@@ -384,6 +391,7 @@ func (s *Server) Serve(ctx context.Context) error {
 		go s.runSessionUpdateReporter(serveCtx)
 	}
 	go s.runTurns(serveCtx)
+	go s.runLoop(serveCtx)
 	if err := s.deliverInitialPrompt(); err != nil {
 		return err
 	}
@@ -588,7 +596,7 @@ func (s *Server) queueSessionStatusPublish(force bool) {
 		return
 	}
 	s.activeMu.Lock()
-	active := s.activeTurn != "" || s.backgroundActive.Load()
+	active := s.activeTurn != "" || s.backgroundActive.Load() || s.loopActive.Load()
 	waitingForInput := s.pendingInputCount.Load() > 0
 	settledTurnID := s.completedTurnID.Load()
 	s.sessionStatusMu.Lock()
@@ -1020,6 +1028,10 @@ func (s *Server) submitParsedMessage(text, requestID string, command sessionComm
 		s.pendingTurn = &turn
 		return nil
 	}
+	return s.enqueueTurnLocked(text, requestID, command, attachments)
+}
+
+func (s *Server) enqueueTurnLocked(text, requestID string, command sessionCommand, attachments []Attachment) error {
 	turn := turnRequest{
 		id:          fmt.Sprintf("turn-%d", s.nextTurnID.Add(1)),
 		text:        text,
@@ -1051,6 +1063,9 @@ func (s *Server) submitClientMessage(ctx context.Context, text, requestID string
 	}
 	if command.kind != sessionCommandMessage && len(attachmentIDs) > 0 {
 		return errors.New("Session commands do not accept attachments")
+	}
+	if command.kind == sessionCommandLoop {
+		return s.controlLoop(command.loop, text, requestID)
 	}
 	if command.kind == sessionCommandGoal {
 		if _, ok := s.provider.(goalProvider); !ok {
@@ -1108,6 +1123,9 @@ func (s *Server) editMessage(turnID, text string, expectedRevision int64, reques
 	command, err := parseSessionCommand(text)
 	if err != nil {
 		return err
+	}
+	if command.kind == sessionCommandLoop {
+		return errors.New("submit /loop commands directly instead of editing pending work")
 	}
 	if command.kind != sessionCommandMessage && len(turn.attachments) > 0 {
 		return errors.New("Session commands do not accept attachments")
@@ -1178,6 +1196,7 @@ func (s *Server) removePendingMessage(turnID string, expectedRevision int64, req
 	s.submitMu.Unlock()
 
 	s.markTurnCompleted(turn.id)
+	s.signalLoop()
 	s.requestSessionStatusPublish()
 	if shouldReport {
 		s.signalSessionUpdateReport()
