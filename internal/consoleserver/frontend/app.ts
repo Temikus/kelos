@@ -221,6 +221,12 @@ interface RuntimeUsage {
   outputTokens: number;
 }
 
+interface BackgroundTask {
+  id: string;
+  description?: string;
+  startedAt: string;
+}
+
 interface RuntimeStatus {
   sessionName?: string;
   agentType?: string;
@@ -233,6 +239,7 @@ interface RuntimeStatus {
   usage?: RuntimeUsage;
   weeklyLimit?: {usedPercent: number};
   backgroundTasks?: number;
+  backgroundTaskDetails?: BackgroundTask[];
 }
 
 interface InputOption {
@@ -514,6 +521,8 @@ const elements = requireElements({
   progress: document.querySelector('#session-progress'),
   progressLabel: document.querySelector('#session-progress-label'),
   progressElapsed: document.querySelector('#session-progress-elapsed'),
+  backgroundTasks: document.querySelector('#session-background-tasks'),
+  backgroundTaskStatus: document.querySelector('#session-background-tasks-status'),
   pending: document.querySelector('#pending-message'),
   connection: document.querySelector('#connection-pill'),
   dialog: document.querySelector('#session-dialog'),
@@ -2120,6 +2129,7 @@ function updateFileChangesHeader() {
 }
 
 function activateSessionView(view: SessionView) {
+  elements.backgroundTaskStatus.textContent = '';
   state.currentView = view;
   state.lastEventID = view.lastEventID;
   state.assistantSegmentByTurn = view.assistantSegmentByTurn;
@@ -2181,6 +2191,7 @@ function discardSessionView(session?: SessionSummary | null) {
 }
 
 function resetCurrentSessionView() {
+  elements.backgroundTaskStatus.textContent = '';
   closePromptHistory();
   state.messagesScrollTop = 0;
   state.messagesScrollPaused = false;
@@ -2263,6 +2274,7 @@ function renderSessionProgress(now = Date.now()) {
     elements.progress.dataset.state = 'idle';
     elements.progressLabel.textContent = '';
     elements.progressElapsed.textContent = '';
+    renderBackgroundTaskProgress(now);
     return;
   }
   let label = 'Working';
@@ -2285,6 +2297,55 @@ function renderSessionProgress(now = Date.now()) {
   elements.progress.dataset.state = status;
   if (elements.progressLabel.textContent !== label) elements.progressLabel.textContent = label;
   elements.progressElapsed.textContent = state.activeTurn ? `(${formatSessionProgressElapsed(now - startedAt)})` : '';
+  renderBackgroundTaskProgress(now);
+}
+
+function renderBackgroundTaskProgress(now: number) {
+  const tasks = elements.progress.hidden ? [] : state.runtimeStatus?.backgroundTaskDetails || [];
+  elements.backgroundTasks.hidden = !tasks.length;
+  const taskIDs = [...elements.backgroundTasks.children].map(item => (item as HTMLElement).dataset.taskId);
+  if (taskIDs.length !== tasks.length || tasks.some((task, index) => task.id !== taskIDs[index])) {
+    elements.backgroundTasks.replaceChildren();
+    for (const task of tasks) {
+      const item = document.createElement('li');
+      item.dataset.taskId = task.id;
+      const name = document.createElement('span');
+      name.className = 'background-task-name';
+      const elapsed = document.createElement('span');
+      elapsed.className = 'background-task-elapsed';
+      item.append(name, elapsed);
+      elements.backgroundTasks.append(item);
+    }
+  }
+  for (const [index, task] of tasks.entries()) {
+    const item = elements.backgroundTasks.children[index];
+    const name = item.querySelector<HTMLElement>('.background-task-name')!;
+    const label = backgroundTaskName(task);
+    if (name.textContent !== label) {
+      name.textContent = label;
+      name.title = label;
+    }
+    const elapsed = item.querySelector('.background-task-elapsed')!;
+    const startedAt = Date.parse(task.startedAt);
+    const duration = Number.isNaN(startedAt) ? '' : `(${formatSessionProgressElapsed(now - startedAt)})`;
+    if (elapsed.textContent !== duration) elapsed.textContent = duration;
+  }
+}
+
+function backgroundTaskName(task: BackgroundTask) {
+  return task.description || `Background task ${task.id}`;
+}
+
+function announceBackgroundTaskChanges(previousTasks: BackgroundTask[], tasks: BackgroundTask[]) {
+  const session = state.selected;
+  if (state.replayingHistory || !session || session.phase !== 'Ready' || session.resetting || session.userSuspended) return;
+  const previousIDs = new Set(previousTasks.map(task => task.id));
+  const taskIDs = new Set(tasks.map(task => task.id));
+  const messages = [
+    ...tasks.filter(task => !previousIDs.has(task.id)).map(task => `Background task started: ${backgroundTaskName(task)}`),
+    ...previousTasks.filter(task => !taskIDs.has(task.id)).map(task => `Background task finished: ${backgroundTaskName(task)}`),
+  ];
+  if (messages.length) elements.backgroundTaskStatus.textContent = messages.join('. ');
 }
 
 function refreshSessionProgress() {
@@ -2296,7 +2357,7 @@ function refreshSessionProgress() {
       activeTurnStartedAt: 0,
       waitingForInput: false,
       interrupting: false,
-      runtimeStatus: state.runtimeStatus ? {...state.runtimeStatus, backgroundTasks: undefined} : null,
+      runtimeStatus: state.runtimeStatus ? {...state.runtimeStatus, backgroundTasks: undefined, backgroundTaskDetails: undefined} : null,
     };
     Object.assign(state, activity);
     if (state.currentView) Object.assign(state.currentView, activity);
@@ -2306,7 +2367,8 @@ function refreshSessionProgress() {
     state.progressTimer = null;
   }
   renderSessionProgress();
-  if (state.activeTurn && !elements.progress.hidden) {
+  const timedBackgroundTask = state.runtimeStatus?.backgroundTaskDetails?.some(task => !Number.isNaN(Date.parse(task.startedAt)));
+  if (!elements.progress.hidden && (state.activeTurn || timedBackgroundTask)) {
     state.progressTimer = window.setInterval(() => renderSessionProgress(), 1000);
   }
 }
@@ -5126,12 +5188,15 @@ function handleEvent(event) {
         requestWorkspaceChanges(true);
       }
       break;
-    case 'runtime.status':
+    case 'runtime.status': {
+      const previousTasks = state.runtimeStatus?.backgroundTaskDetails || [];
       state.runtimeStatus = event.runtime || null;
       if (state.currentView) state.currentView.runtimeStatus = state.runtimeStatus;
       renderRuntimeStatus();
       refreshSessionProgress();
+      announceBackgroundTaskChanges(previousTasks, state.runtimeStatus?.backgroundTaskDetails || []);
       break;
+    }
     case 'runtime.recovered':
       state.runtimeRecoveryActive = true;
       renderRecovery(event);

@@ -1460,6 +1460,9 @@ func TestSessionComposerUsesOneSendAndInterruptAction(t *testing.T) {
 	if !strings.Contains(body, `id="session-progress"`) {
 		t.Error("Session composer does not contain the agent progress region")
 	}
+	if !strings.Contains(body, `id="session-background-tasks-status" role="status" aria-live="polite" aria-atomic="true"`) {
+		t.Error("Session composer does not contain the background task announcement region")
+	}
 	for _, expected := range []string{`id="attachment-input" type="file" multiple`, `id="attach-files"`, `id="pending-attachments"`} {
 		if !strings.Contains(body, expected) {
 			t.Errorf("Session composer does not contain attachment control %s", expected)

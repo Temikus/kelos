@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -31,6 +32,7 @@ type claudeEventEnvelope struct {
 	SkipTranscript  bool   `json:"skip_transcript"`
 	Ambient         bool   `json:"ambient"`
 	TaskID          string `json:"task_id"`
+	Description     string `json:"description"`
 	Patch           struct {
 		Status string `json:"status"`
 	} `json:"patch"`
@@ -71,7 +73,7 @@ type ClaudeProvider struct {
 	hadTextDelta      bool
 	blockText         map[int]*strings.Builder
 	interrupted       bool
-	tasks             map[string]struct{}
+	tasks             map[string]BackgroundTask
 
 	statusMu sync.Mutex
 	model    string
@@ -365,9 +367,11 @@ func (p *ClaudeProvider) recordTaskActivity(event claudeEventEnvelope) {
 	switch event.Subtype {
 	case "task_started":
 		if p.tasks == nil {
-			p.tasks = map[string]struct{}{}
+			p.tasks = map[string]BackgroundTask{}
 		}
-		p.tasks[event.TaskID] = struct{}{}
+		if _, exists := p.tasks[event.TaskID]; !exists {
+			p.tasks[event.TaskID] = BackgroundTask{ID: event.TaskID, Description: event.Description, StartedAt: time.Now().UTC()}
+		}
 	case "task_notification":
 		delete(p.tasks, event.TaskID)
 	case "task_updated":
@@ -377,9 +381,22 @@ func (p *ClaudeProvider) recordTaskActivity(event claudeEventEnvelope) {
 		}
 	}
 	after, sink := len(p.tasks), p.eventSink
+	var tasks []BackgroundTask
+	if sink != nil && before != after {
+		tasks = make([]BackgroundTask, 0, after)
+		for _, task := range p.tasks {
+			tasks = append(tasks, task)
+		}
+		slices.SortFunc(tasks, func(a, b BackgroundTask) int {
+			if order := a.StartedAt.Compare(b.StartedAt); order != 0 {
+				return order
+			}
+			return strings.Compare(a.ID, b.ID)
+		})
+	}
 	p.activeMu.Unlock()
 	if sink != nil && before != after {
-		sink.Emit(Event{Type: EventRuntimeStatus, Runtime: &RuntimeStatus{BackgroundTasks: &after}})
+		sink.Emit(Event{Type: EventRuntimeStatus, Runtime: &RuntimeStatus{BackgroundTasks: &after, BackgroundTaskDetails: tasks}})
 	}
 }
 

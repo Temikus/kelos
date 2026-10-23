@@ -219,6 +219,8 @@ function resetHarness() {
     progress: new TestNode('div'),
     progressLabel: new TestNode('span'),
     progressElapsed: new TestNode('span'),
+    backgroundTasks: new TestNode('ul'),
+    backgroundTaskStatus: new TestNode('div'),
     runtimeStatus: new TestNode('div'),
     sidebar: new TestNode('aside'),
     displayNameButton: new TestNode('button'),
@@ -773,6 +775,14 @@ function testSessionProgressLifecycle() {
   assert.equal(state.progressTimer, null);
 }
 
+function backgroundTaskRows() {
+  return elements.backgroundTasks.children.map(item => ({
+    id: item.dataset.taskId,
+    name: item.querySelector('.background-task-name').textContent,
+    elapsed: item.querySelector('.background-task-elapsed').textContent,
+  }));
+}
+
 function testBackgroundTaskProgress() {
   resetHarness();
   state.selected = {namespace: 'default', name: 'one', phase: 'Ready'};
@@ -781,43 +791,138 @@ function testBackgroundTaskProgress() {
   state.socket = {readyState: WebSocket.OPEN, send() {}};
   state.sendingMessage = false;
   elements.input.disabled = false;
-  handleEvent({type: 'runtime.status', runtime: {backgroundTasks: 1}});
+  const first = {id: 'first', description: 'Review API changes', startedAt: '2026-07-23T12:00:00Z'};
+  const second = {id: 'second', description: 'Run unit tests', startedAt: '2026-07-23T12:01:00Z'};
+  const now = Date.parse('2026-07-23T12:01:05Z');
+  handleEvent({type: 'runtime.status', runtime: {backgroundTasks: 1, backgroundTaskDetails: [first]}});
+  renderSessionProgress(now);
   assert.equal(elements.progress.hidden, false);
   assert.equal(elements.progress.dataset.state, 'background');
   assert.equal(elements.progressLabel.textContent, '1 background task running');
   assert.equal(elements.progressElapsed.textContent, '');
-  assert.equal(state.progressTimer, null);
+  assert.equal(elements.backgroundTasks.hidden, false);
+  assert.deepEqual(backgroundTaskRows(), [{id: 'first', name: 'Review API changes', elapsed: '(1m 05s)'}]);
+  assert.equal(progressTimers.size, 1);
+  const taskRow = elements.backgroundTasks.firstChild;
+  const taskName = taskRow.querySelector('.background-task-name');
+  const nameText = taskName.firstChild;
+  const originalNow = Date.now;
+  Date.now = () => now + 1000;
+  try {
+    progressTimers.get(state.progressTimer)();
+    assert.equal(backgroundTaskRows()[0].elapsed, '(1m 06s)');
+    assert.equal(elements.backgroundTasks.firstChild, taskRow);
+    assert.equal(taskRow.querySelector('.background-task-name'), taskName);
+    assert.equal(taskName.firstChild, nameText);
+  } finally {
+    Date.now = originalNow;
+  }
   updateComposerAction();
   assert.equal(elements.send.attributes.get('aria-label'), 'Send message');
   assert.equal(elements.send.disabled, false);
 
-  handleEvent({type: 'turn.started', turnId: 'turn-1'});
-  assert.equal(elements.progressLabel.textContent, 'Working · 1 background task');
-  handleEvent({type: 'runtime.status', runtime: {backgroundTasks: 2}});
+  handleEvent({type: 'runtime.status', runtime: {backgroundTasks: 2, backgroundTaskDetails: [first, second]}});
+  renderSessionProgress(now);
+  const expected = [
+    {id: 'first', name: 'Review API changes', elapsed: '(1m 05s)'},
+    {id: 'second', name: 'Run unit tests', elapsed: '(5s)'},
+  ];
+  assert.deepEqual(backgroundTaskRows(), expected);
+
+  handleEvent({type: 'turn.started', turnId: 'turn-1', timestamp: '2026-07-23T12:01:02Z'});
+  renderSessionProgress(now);
   assert.equal(elements.progressLabel.textContent, 'Working · 2 background tasks');
+  assert.equal(elements.progressElapsed.textContent, '(3s)');
+  assert.deepEqual(backgroundTaskRows(), expected);
   handleEvent({type: 'input.requested', turnId: 'turn-1', inputId: 'input-1'});
   assert.equal(elements.progressLabel.textContent, 'Waiting for input · 2 background tasks');
   handleEvent({type: 'turn.interrupting', turnId: 'turn-1'});
   assert.equal(elements.progressLabel.textContent, 'Interrupting · 2 background tasks');
-  handleEvent({type: 'turn.completed', turnId: 'turn-1', status: 'completed'});
+  handleEvent({type: 'turn.completed', turnId: 'turn-1', status: 'completed', timestamp: '2026-07-23T12:01:05Z'});
+  renderSessionProgress(now);
   assert.equal(elements.progressLabel.textContent, '2 background tasks running');
   assert.equal(elements.progressElapsed.textContent, '');
-  assert.equal(state.progressTimer, null);
+  assert.deepEqual(backgroundTaskRows(), expected);
+  assert.equal(progressTimers.size, 1);
 
   saveCurrentSessionView();
   activateSessionView(createSessionView());
   assert.equal(elements.progress.hidden, true);
+  assert.equal(elements.backgroundTasks.hidden, true);
+  assert.equal(progressTimers.size, 0);
   activateSessionView(view);
-  assert.equal(elements.progressLabel.textContent, '2 background tasks running');
+  renderSessionProgress(now);
+  assert.deepEqual(backgroundTaskRows(), expected);
+  assert.equal(progressTimers.size, 1);
 
   handleEvent({type: 'history.start', reset: true, journalId: 'reconnected'});
-  handleEvent({type: 'runtime.status', runtime: {backgroundTasks: 1}});
+  handleEvent({type: 'runtime.status', runtime: {backgroundTasks: 2, backgroundTaskDetails: [first, second]}});
   handleEvent({type: 'history.end', historyState: {}});
+  renderSessionProgress(now);
+  assert.deepEqual(backgroundTaskRows(), expected);
+
+  handleEvent({type: 'runtime.status', runtime: {backgroundTasks: 1, backgroundTaskDetails: [second]}});
+  renderSessionProgress(now);
   assert.equal(elements.progressLabel.textContent, '1 background task running');
+  assert.deepEqual(backgroundTaskRows(), [expected[1]]);
   handleEvent({type: 'runtime.status', runtime: {backgroundTasks: 0}});
   assert.equal(elements.progress.hidden, true);
+  assert.equal(elements.backgroundTasks.hidden, true);
+  assert.deepEqual(backgroundTaskRows(), []);
+  assert.equal(state.progressTimer, null);
+  assert.equal(progressTimers.size, 0);
+
+  handleEvent({type: 'runtime.status', runtime: {backgroundTasks: 1, backgroundTaskDetails: [{id: 'third', startedAt: '2026-07-23T12:01:00Z'}]}});
+  renderSessionProgress(now);
+  assert.deepEqual(backgroundTaskRows(), [{id: 'third', name: 'Background task third', elapsed: '(5s)'}]);
   handleEvent({type: 'runtime.status', runtime: {model: 'provider-without-task-count'}});
   assert.equal(elements.progress.hidden, true);
+  assert.equal(elements.backgroundTasks.hidden, true);
+  assert.equal(progressTimers.size, 0);
+}
+
+function testBackgroundTaskProgressWithoutTiming() {
+  for (const backgroundTaskDetails of [undefined, [{id: 'first', startedAt: 'invalid'}]]) {
+    resetHarness();
+    state.selected = {namespace: 'default', name: 'one', phase: 'Ready'};
+    handleEvent({type: 'runtime.status', runtime: {backgroundTasks: 1, backgroundTaskDetails}});
+    assert.equal(elements.progressLabel.textContent, '1 background task running');
+    assert.equal(elements.progressElapsed.textContent, '');
+    assert.equal(elements.backgroundTasks.hidden, !backgroundTaskDetails);
+    assert.equal(progressTimers.size, 0);
+    if (backgroundTaskDetails) assert.equal(backgroundTaskRows()[0].elapsed, '');
+  }
+}
+
+function testBackgroundTaskAnnouncements() {
+  resetHarness();
+  state.selected = {namespace: 'default', name: 'one', phase: 'Ready'};
+  const first = {id: 'first', description: 'Review API changes', startedAt: '2026-07-23T12:00:00Z'};
+  const second = {id: 'second', description: 'Run unit tests', startedAt: '2026-07-23T12:01:00Z'};
+  const report = tasks => handleEvent({type: 'runtime.status', runtime: {backgroundTasks: tasks.length, backgroundTaskDetails: tasks}});
+  report([first]);
+  assert.equal(elements.backgroundTaskStatus.textContent, 'Background task started: Review API changes');
+  const announcement = elements.backgroundTaskStatus.firstChild;
+  renderSessionProgress(Date.parse('2026-07-23T12:01:05Z'));
+  assert.equal(elements.backgroundTaskStatus.firstChild, announcement);
+  report([first]);
+  assert.equal(elements.backgroundTaskStatus.firstChild, announcement);
+
+  report([first, second]);
+  assert.equal(elements.backgroundTaskStatus.textContent, 'Background task started: Run unit tests');
+  report([second]);
+  assert.equal(elements.backgroundTaskStatus.textContent, 'Background task finished: Review API changes');
+  report([]);
+  assert.equal(elements.backgroundTaskStatus.textContent, 'Background task finished: Run unit tests');
+  assert.equal(elements.progress.hidden, true);
+  assert.equal(elements.backgroundTaskStatus.hidden, false);
+
+  handleEvent({type: 'history.start', reset: true});
+  report([first]);
+  assert.equal(elements.backgroundTaskStatus.textContent, '');
+  handleEvent({type: 'history.end', historyState: {}});
+  activateSessionView(createSessionView());
+  assert.equal(elements.backgroundTaskStatus.textContent, '');
 }
 
 function testSessionProgressRequiresReadyRuntime() {
@@ -828,10 +933,10 @@ function testSessionProgressRequiresReadyRuntime() {
       state.selected = {...session};
       const view = createSessionView();
       activateSessionView(view);
-      handleEvent({type: 'runtime.status', runtime: {backgroundTasks: 2}});
+      handleEvent({type: 'runtime.status', runtime: {backgroundTasks: 2, backgroundTaskDetails: [{id: 'first', startedAt: '2026-07-23T12:00:00Z'}, {id: 'second', startedAt: '2026-07-23T12:01:00Z'}]}});
       if (activeTurn) handleEvent({type: 'turn.started', turnId: 'turn-1'});
       assert.equal(elements.progress.hidden, false);
-      assert.equal(progressTimers.size, activeTurn ? 1 : 0);
+      assert.equal(progressTimers.size, 1);
 
       Object.assign(state.selected, change);
       renderSessionHeader();
@@ -854,6 +959,9 @@ function testSessionProgressRequiresReadyRuntime() {
       assert.equal(state.activeTurn, false);
       assert.equal(state.activeTurnID, '');
       assert.equal(state.runtimeStatus.backgroundTasks, undefined);
+      assert.equal(state.runtimeStatus.backgroundTaskDetails, undefined);
+      assert.equal(elements.backgroundTasks.hidden, true);
+      assert.deepEqual(backgroundTaskRows(), []);
       handleEvent({type: 'runtime.status', runtime: {backgroundTasks: 1}});
       assert.equal(elements.progressLabel.textContent, '1 background task running');
     }
@@ -2194,6 +2302,8 @@ testSessionViewSaveAndRestore();
 testSessionViewReset();
 testSessionProgressLifecycle();
 testBackgroundTaskProgress();
+testBackgroundTaskProgressWithoutTiming();
+testBackgroundTaskAnnouncements();
 testSessionProgressRequiresReadyRuntime();
 testComposerInterruptsWhileInputIsDisabled();
 testComposerLabelsPendingSubmission();
