@@ -146,7 +146,14 @@ func TestSessionTUIComposerIdentifiesCommands(t *testing.T) {
 		{text: "/goal resume", want: "Goal command · Enter to resume goal"},
 		{text: "/goal clear", want: "Goal command · Enter to clear goal"},
 		{text: "/goal clear tech debt", want: "Goal command · Enter to start goal"},
-		{text: "/goal", provider: "claude-code", want: "Goal command · /goal is available only in Codex Sessions"},
+		{text: "/goal", provider: "claude-code", want: "Goal command · Enter to show goal"},
+		{text: "/goal All tests pass", provider: "claude-code", want: "Goal command · Enter to start goal · Sets or replaces Claude Code's completion condition"},
+		{text: "/goal clear", provider: "claude-code", want: "Goal command · Enter to clear goal"},
+		{text: "/goal clear", provider: "claude-code", active: true, want: "Goal command · Enter to clear goal · Queued until active work ends; use /interrupt to apply sooner"},
+		{text: "/goal stop", provider: "claude-code", want: "Goal command · Enter to clear goal"},
+		{text: "/goal STOP", provider: "claude-code", want: "Goal command · Enter to clear goal"},
+		{text: "/goal edit All tests pass", provider: "claude-code", want: "Goal command · Enter to start goal · Sets or replaces Claude Code's completion condition"},
+		{text: "/goal", provider: "opencode", want: "Goal command · /goal is available only in Codex and Claude Code Sessions"},
 		{text: "/loop", want: "Loop command · Enter to show loop"},
 		{text: "/loop 5m Check CI", provider: "claude-code", want: "Loop command · Enter to start loop"},
 		{text: "/loop pause", active: true, want: "Loop command · Enter to pause loop"},
@@ -213,7 +220,7 @@ func TestSessionTUIComposerHighlightsCommands(t *testing.T) {
 		{text: "!make test", color: "33"},
 		{text: "/goal pause", color: "32"},
 		{text: "/goal edit", color: "31"},
-		{text: "/goal pause", provider: "claude-code", color: "31"},
+		{text: "/goal pause", provider: "claude-code", color: "32"},
 		{text: "ordinary message"},
 	} {
 		model.input.SetValue(test.text)
@@ -246,7 +253,7 @@ func TestSessionTUICommandSubmission(t *testing.T) {
 	}{
 		{text: "!", blocked: true},
 		{text: "/goal edit", blocked: true},
-		{text: "/goal pause", provider: "claude-code", blocked: true},
+		{text: "/goal pause", provider: "claude-code"},
 		{text: "!pwd", attachments: true, blocked: true},
 		{text: "/goal pause", attachments: true, blocked: true},
 		{text: "!pwd", pending: true, active: true, blocked: true},

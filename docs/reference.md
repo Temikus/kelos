@@ -416,8 +416,10 @@ prompt; Codex and OpenCode record them immediately. Live and retained command
 output appears as tool activity, and interrupting the Session turn stops the
 command.
 
-`/goal` is available only in Codex Sessions and uses the persisted goal owned by
-the Codex conversation:
+`/goal` uses the agent's native goal command in Codex and Claude Code Sessions.
+OpenCode Sessions do not support `/goal`.
+
+Codex supports these commands:
 
 | Command | Behavior |
 |---------|----------|
@@ -434,6 +436,22 @@ Interrupting active goal work pauses the goal before interrupting its current
 turn; detaching with `/quit` or `/exit` leaves it running. The goal and its
 accounting survive client reconnection and runtime container restart. They
 survive Pod replacement only when the Session workspace is persistent.
+
+Claude Code supports `/goal CONDITION` to set or replace a completion condition,
+`/goal` to show its native status, and `/goal clear` to remove it. Claude Code
+evaluates the condition after each model turn and continues until it is met,
+judged impossible, or stopped by a native error or continuation limit. Its
+native command output appears in the conversation. Goal commands submitted
+while Claude is working are queued until that work ends; use `/interrupt` to
+stop active work and let a queued command run sooner. Claude Code also accepts
+`stop`, `off`, `reset`, `none`, and `cancel` as aliases for `clear`. Other arguments
+are completion conditions, including words that Codex treats as controls such
+as `edit`, `pause`, and `resume`.
+
+Claude Code retains the goal with its conversation history. After runtime or
+Pod replacement, send a prompt to continue the resumed conversation and its
+retained goal; Pod replacement requires persistent workspace storage. Claude
+Code's native policy and settings can disable goal commands.
 
 `/loop` repeats a prompt in Claude Code, Codex, and OpenCode Sessions:
 

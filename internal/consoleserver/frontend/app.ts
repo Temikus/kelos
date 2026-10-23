@@ -3913,16 +3913,22 @@ function composerCommand() {
       'Clear goal': 'Remove the current goal',
     };
     detail = invalid ? 'Enter an objective after /goal edit' : descriptions[action];
-    if (state.selected && state.selected.provider !== 'codex') {
+    if (state.selected?.provider === 'claude-code') {
+      invalid = false;
+      action = args.length === 0 ? 'Show goal' : args.length === 1 && ['clear', 'stop', 'off', 'reset', 'none', 'cancel'].includes(args[0].toLowerCase()) ? 'Clear goal' : 'Start goal';
+      prefix = action === 'Clear goal' ? text : '/goal';
+      detail = action === 'Start goal' ? "Sets or replaces Claude Code's completion condition" : descriptions[action];
+      if (state.activeTurn) detail = 'Queued until active work ends; use /interrupt to apply sooner';
+    } else if (state.selected && state.selected.provider !== 'codex') {
       invalid = true;
-      detail = '/goal is available only in Codex Sessions';
+      detail = '/goal is available only in Codex and Claude Code Sessions';
     }
   }
   if (kind !== 'message' && currentAttachmentFiles().length > 0) {
     invalid = true;
     detail = 'Remove attachments to use a command';
   }
-  if (state.pendingMessage && (kind === 'shell' || kind === 'goal' && !state.activeTurn)) {
+  if (state.pendingMessage && (kind === 'shell' || kind === 'goal' && (!state.activeTurn || state.selected?.provider === 'claude-code'))) {
     invalid = true;
     detail = 'Wait for pending work to start or remove it before submitting a command';
   }

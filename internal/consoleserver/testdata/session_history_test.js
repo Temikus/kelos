@@ -972,6 +972,54 @@ function testComposerRecognizesCommands() {
   window.matchMedia = () => ({matches: false});
 }
 
+function testClaudeGoalComposer() {
+  for (const [text, action] of [
+    ['/goal', 'Show goal'],
+    ['/goal All tests pass', 'Start goal'],
+    ['/goal edit tests until they pass', 'Start goal'],
+    ['/goal edit', 'Start goal'],
+    ['/goal pause', 'Start goal'],
+    ['/goal resume', 'Start goal'],
+    ['/goal clear', 'Clear goal'],
+    ['/goal STOP', 'Clear goal'],
+    ['/goal clear tech debt', 'Start goal'],
+  ]) {
+    resetHarness();
+    state.selected = {namespace: 'default', name: 'one', provider: 'claude-code'};
+    state.socket = {readyState: WebSocket.OPEN};
+    elements.input.value = text;
+    updateComposerAction();
+    assert.equal(elements.send.disabled, false, text);
+    assert.equal(elements.send.textContent, action, text);
+    assert.equal(elements.composer.dataset.command, 'goal', text);
+    assert.equal(elements.composerHighlight.querySelector('mark').textContent, action === 'Clear goal' ? text : '/goal', text);
+  }
+  state.activeTurn = true;
+  elements.input.value = '/goal clear';
+  updateComposerAction();
+  assert.equal(elements.composerCommandHelp.textContent, 'Queued until active work ends; use /interrupt to apply sooner');
+  state.pendingMessage = {event: {turnId: 'turn-2'}};
+  updateComposerAction();
+  assert.equal(elements.send.disabled, true);
+  assert.equal(elements.composerCommandHelp.textContent, 'Wait for pending work to start or remove it before submitting a command');
+}
+
+async function testClaudeGoalCommandSubmission() {
+  resetHarness();
+  state.selected = {namespace: 'default', name: 'one', uid: 'uid-one', provider: 'claude-code'};
+  const sent = [];
+  state.socket = {readyState: WebSocket.OPEN, send: message => sent.push(JSON.parse(message))};
+  for (const text of ['/goal', '/goal All tests pass', '/goal clear']) {
+    elements.input.value = text;
+    await submitComposer();
+  }
+  assert.deepEqual(sent, [
+    {type: 'message', text: '/goal', attachmentIds: []},
+    {type: 'message', text: '/goal All tests pass', attachmentIds: []},
+    {type: 'message', text: '/goal clear', attachmentIds: []},
+  ]);
+}
+
 function testComposerHighlightsCommandText() {
   resetHarness();
   state.selected = {namespace: 'default', name: 'one', provider: 'codex'};
@@ -1065,8 +1113,7 @@ async function testComposerCommandSubmission() {
     ['/loop 5m', 'claude-code', 'Use /loop INTERVAL PROMPT with an interval of at least 1s (for example 5m)'],
     ['/loop 0s Check CI', 'opencode', 'Use /loop INTERVAL PROMPT with an interval of at least 1s (for example 5m)'],
     ['/goal edit', 'codex', 'Enter an objective after /goal edit'],
-    ['/goal pause', 'claude-code', '/goal is available only in Codex Sessions'],
-    ['\ufeff/goal pause', 'claude-code', '/goal is available only in Codex Sessions'],
+    ['/goal', 'opencode', '/goal is available only in Codex and Claude Code Sessions'],
     ['\ufeff!', 'codex', 'Enter a command after !'],
   ]) {
     state.selected.provider = provider;
@@ -2215,6 +2262,7 @@ testSessionProgressRequiresReadyRuntime();
 testComposerInterruptsWhileInputIsDisabled();
 testComposerLabelsPendingSubmission();
 testComposerRecognizesCommands();
+testClaudeGoalComposer();
 testComposerHighlightsCommandText();
 testComposerHighlightEvents();
 testComposerCommandsRejectAttachments();
@@ -2268,6 +2316,7 @@ testReadySessionDisconnectsWhenItBecomesPending()
   .then(testSuspendSessionHidesBackgroundProgress)
   .then(testComposerIgnoresReentrantSubmission)
   .then(testComposerCommandSubmission)
+  .then(testClaudeGoalCommandSubmission)
   .then(testPromptHistoryBrowseAndReuse)
   .then(() => process.stdout.write('Session history tests passed\n'))
   .catch(error => {

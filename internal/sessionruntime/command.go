@@ -43,7 +43,7 @@ type goalCommand struct {
 	objective string
 }
 
-func parseSessionCommand(text string) (sessionCommand, error) {
+func parseSessionCommand(text, agentType string) (sessionCommand, error) {
 	trimmed := strings.TrimSpace(text)
 	if hasCommandPrefix(trimmed, "/loop") {
 		return parseLoopCommand(strings.TrimSpace(strings.TrimPrefix(trimmed, "/loop")))
@@ -64,6 +64,15 @@ func parseSessionCommand(text string) (sessionCommand, error) {
 		return sessionCommand{kind: sessionCommandGoal, goal: goalCommand{action: goalCommandShow}}, nil
 	}
 	fields := strings.Fields(arguments)
+	if agentType == "claude-code" {
+		if len(fields) == 1 {
+			switch strings.ToLower(fields[0]) {
+			case "clear", "stop", "off", "reset", "none", "cancel":
+				return sessionCommand{kind: sessionCommandGoal, goal: goalCommand{action: goalCommandClear}}, nil
+			}
+		}
+		return sessionCommand{kind: sessionCommandGoal, goal: goalCommand{action: goalCommandCreate, objective: arguments}}, nil
+	}
 	switch fields[0] {
 	case "clear":
 		if len(fields) == 1 {

@@ -1531,7 +1531,7 @@ func (m *sessionTUIModel) composerCommandError() string {
 	if len(m.pendingAttachments) > 0 {
 		return "Remove attachments to use a command"
 	}
-	if !loop && m.pendingEditTurnID == "" && m.pendingTurnID != "" && (shell || !m.turnActive) {
+	if !loop && m.pendingEditTurnID == "" && m.pendingTurnID != "" && (shell || !m.turnActive || goal && m.runtimeStatus.AgentType == "claude-code") {
 		return "Wait for pending work to start or remove it before submitting a command"
 	}
 	if shell && strings.TrimSpace(strings.TrimPrefix(text, "!")) == "" {
@@ -1550,10 +1550,10 @@ func (m *sessionTUIModel) composerCommandError() string {
 		}
 	}
 	if goal {
-		if m.runtimeStatus.AgentType != "" && m.runtimeStatus.AgentType != "codex" {
-			return "/goal is available only in Codex Sessions"
+		if m.runtimeStatus.AgentType != "" && m.runtimeStatus.AgentType != "codex" && m.runtimeStatus.AgentType != "claude-code" {
+			return "/goal is available only in Codex and Claude Code Sessions"
 		}
-		if len(fields) == 2 && fields[1] == "edit" {
+		if m.runtimeStatus.AgentType != "claude-code" && len(fields) == 2 && fields[1] == "edit" {
 			return "Enter an objective after /goal edit"
 		}
 	}
@@ -1582,6 +1582,22 @@ func (m *sessionTUIModel) composerHint() string {
 			action = "edit goal"
 		case len(fields) == 2 && (fields[1] == "pause" || fields[1] == "resume" || fields[1] == "clear"):
 			action = fields[1] + " goal"
+		}
+		if m.runtimeStatus.AgentType == "claude-code" {
+			action = "show goal"
+			if len(fields) > 1 {
+				action = "start goal"
+				detail = "Sets or replaces Claude Code's completion condition"
+				if len(fields) == 2 {
+					switch strings.ToLower(fields[1]) {
+					case "clear", "stop", "off", "reset", "none", "cancel":
+						action, detail = "clear goal", ""
+					}
+				}
+			}
+			if m.turnActive {
+				detail = "Queued until active work ends; use /interrupt to apply sooner"
+			}
 		}
 	} else if len(fields) > 0 && fields[0] == "/loop" {
 		label, action = "Loop command", "start loop"
