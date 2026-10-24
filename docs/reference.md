@@ -618,7 +618,13 @@ The Console and interactive terminal keep a progress indicator visible while
 Claude Code reports unfinished background tasks, even after the parent turn
 ends. It shows the number of background tasks running; during a turn, the count
 appears alongside `Working`, `Waiting for input`, or `Interrupting`. Background
-work alone leaves the composer available for another message. The Console clears
+work alone leaves the composer available for another message. When the runtime
+reports individual task details, the Console lists each running task with its
+own elapsed time, including during a foreground turn. Task descriptions identify
+the rows, with task IDs used when a description is unavailable. Each timer starts
+when the runtime observes that task starting, survives reconnects and page
+refreshes, and disappears when the task finishes. Runtimes that report only a
+count show the count without individual timers. The Console clears
 live activity while the Session is suspended, resetting, or not Ready and
 refreshes it from the runtime after resuming. The count is
 refreshed on reconnect and includes reported subagents and background commands,

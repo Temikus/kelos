@@ -119,6 +119,15 @@ type RuntimeStatus struct {
 	// BackgroundTasks counts unfinished provider-reported tasks. Nil means
 	// the count is unavailable.
 	BackgroundTasks *int `json:"backgroundTasks,omitempty"`
+	// BackgroundTaskDetails describes the unfinished tasks when available.
+	BackgroundTaskDetails []BackgroundTask `json:"backgroundTaskDetails,omitempty"`
+}
+
+// BackgroundTask describes one unfinished provider-reported task.
+type BackgroundTask struct {
+	ID          string    `json:"id"`
+	Description string    `json:"description,omitempty"`
+	StartedAt   time.Time `json:"startedAt"`
 }
 
 // RuntimeUsage describes cumulative provider token use and the model context window.

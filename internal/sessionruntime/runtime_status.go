@@ -2,6 +2,7 @@ package sessionruntime
 
 import (
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 )
@@ -33,7 +34,8 @@ func (s RuntimeStatus) empty() bool {
 		s.PullRequestNumber == 0 &&
 		s.Usage == nil &&
 		s.WeeklyLimit == nil &&
-		s.BackgroundTasks == nil
+		s.BackgroundTasks == nil &&
+		len(s.BackgroundTaskDetails) == 0
 }
 
 func cloneRuntimeStatus(status RuntimeStatus) RuntimeStatus {
@@ -41,6 +43,7 @@ func cloneRuntimeStatus(status RuntimeStatus) RuntimeStatus {
 		count := *status.BackgroundTasks
 		status.BackgroundTasks = &count
 	}
+	status.BackgroundTaskDetails = slices.Clone(status.BackgroundTaskDetails)
 	if status.Usage != nil {
 		usage := *status.Usage
 		status.Usage = &usage
@@ -93,6 +96,7 @@ func (s *Server) updateProviderRuntimeStatus(update RuntimeStatus) {
 		count := *update.BackgroundTasks
 		backgroundChanged = s.runtimeStatus.BackgroundTasks == nil || *s.runtimeStatus.BackgroundTasks != count
 		s.runtimeStatus.BackgroundTasks = &count
+		s.runtimeStatus.BackgroundTaskDetails = slices.Clone(update.BackgroundTaskDetails)
 		s.backgroundActive.Store(count > 0)
 	}
 	if update.Model != "" {

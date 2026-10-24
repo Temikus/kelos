@@ -506,9 +506,9 @@ func TestClaudeReportsBackgroundTaskCountChanges(t *testing.T) {
 	sink := newProviderTestSink(nil)
 	provider.SetEventSink(sink)
 	provider.readLoop(strings.NewReader(strings.Join([]string{
+		`{"type":"system","subtype":"task_started","task_id":"first","description":"Review API changes"}`,
 		`{"type":"system","subtype":"task_started","task_id":"first"}`,
-		`{"type":"system","subtype":"task_started","task_id":"first"}`,
-		`{"type":"system","subtype":"task_started","task_id":"second"}`,
+		`{"type":"system","subtype":"task_started","task_id":"second","description":"Run unit tests"}`,
 		`{"type":"system","subtype":"task_updated","task_id":"unknown","patch":{"status":"completed"}}`,
 		`{"type":"system","subtype":"task_updated","task_id":"first","patch":{"status":"completed"}}`,
 		`{"type":"system","subtype":"task_notification","task_id":"second","status":"completed"}`,
@@ -517,22 +517,67 @@ func TestClaudeReportsBackgroundTaskCountChanges(t *testing.T) {
 		t.Fatal(provider.readErr)
 	}
 	var counts []int
+	var descriptions [][]string
 	for _, event := range sink.snapshot() {
 		if event.Type == EventRuntimeStatus && event.Runtime != nil && event.Runtime.BackgroundTasks != nil {
 			counts = append(counts, *event.Runtime.BackgroundTasks)
+			names := make([]string, 0, len(event.Runtime.BackgroundTaskDetails))
+			for _, task := range event.Runtime.BackgroundTaskDetails {
+				names = append(names, task.Description)
+			}
+			descriptions = append(descriptions, names)
 		}
 	}
 	if want := []int{1, 2, 1, 0}; !reflect.DeepEqual(counts, want) {
 		t.Fatalf("Background task counts = %v, want %v", counts, want)
 	}
+	if want := [][]string{{"Review API changes"}, {"Review API changes", "Run unit tests"}, {"Run unit tests"}, {}}; !reflect.DeepEqual(descriptions, want) {
+		t.Fatalf("Background task descriptions = %v, want %v", descriptions, want)
+	}
 }
 
-func TestServerBackgroundTaskCountStreamsAndReconnects(t *testing.T) {
+func TestClaudeReportsIndividualBackgroundTaskStartTimes(t *testing.T) {
+	provider := &ClaudeProvider{}
+	sink := newProviderTestSink(nil)
+	provider.SetEventSink(sink)
+	first := BackgroundTask{ID: "first", Description: "Review API changes", StartedAt: time.Now().UTC().Add(-time.Minute)}
+	provider.tasks = map[string]BackgroundTask{first.ID: first}
+	beforeStart := time.Now()
+	provider.recordTaskActivity(claudeEventEnvelope{Type: "system", Subtype: "task_started", TaskID: "second", Description: "Run unit tests"})
+	afterStart := time.Now()
+	provider.recordTaskActivity(claudeEventEnvelope{Type: "system", Subtype: "task_started", TaskID: "first"})
+	if got := provider.tasks[first.ID]; !reflect.DeepEqual(got, first) {
+		t.Fatalf("Repeated task start replaced task details: %#v", got)
+	}
+	completed := claudeEventEnvelope{Type: "system", Subtype: "task_updated", TaskID: "first"}
+	completed.Patch.Status = "completed"
+	provider.recordTaskActivity(completed)
+	events := sink.snapshot()
+	if len(events) != 2 || events[0].Runtime == nil || events[1].Runtime == nil {
+		t.Fatalf("Background task events = %#v, want two runtime status updates", events)
+	}
+	tasks := events[0].Runtime.BackgroundTaskDetails
+	if len(tasks) != 2 || !reflect.DeepEqual(tasks[0], first) {
+		t.Fatalf("Background task details = %#v, want first task unchanged", tasks)
+	}
+	second := tasks[1]
+	if second.ID != "second" || second.Description != "Run unit tests" || second.StartedAt.Before(beforeStart) || second.StartedAt.After(afterStart) {
+		t.Fatalf("Second background task = %#v, want its own start time", second)
+	}
+	if got := events[1].Runtime.BackgroundTaskDetails; !reflect.DeepEqual(got, []BackgroundTask{second}) {
+		t.Fatalf("Remaining background tasks = %#v, want %#v", got, second)
+	}
+}
+
+func TestServerBackgroundTaskDetailsStreamAndReconnect(t *testing.T) {
 	journal := NewJournal()
 	defer journal.Close()
 	server := NewServer(Config{}, journal, &fakeProvider{})
-	report := func(count int) {
-		server.events.Emit(Event{Type: EventRuntimeStatus, Runtime: &RuntimeStatus{BackgroundTasks: &count}})
+	first := BackgroundTask{ID: "first", Description: "Review API changes", StartedAt: time.Date(2026, 7, 23, 12, 0, 0, 0, time.UTC)}
+	second := BackgroundTask{ID: "second", Description: "Run unit tests", StartedAt: first.StartedAt.Add(time.Minute)}
+	report := func(tasks ...BackgroundTask) {
+		count := len(tasks)
+		server.events.Emit(Event{Type: EventRuntimeStatus, Runtime: &RuntimeStatus{BackgroundTasks: &count, BackgroundTaskDetails: tasks}})
 	}
 	connect := func() *json.Decoder {
 		serverConnection, clientConnection := net.Pipe()
@@ -546,7 +591,7 @@ func TestServerBackgroundTaskCountStreamsAndReconnects(t *testing.T) {
 		}
 		return json.NewDecoder(clientConnection)
 	}
-	readCount := func(decoder *json.Decoder, want int) {
+	readTasks := func(decoder *json.Decoder, want ...BackgroundTask) {
 		t.Helper()
 		for {
 			var event Event
@@ -556,28 +601,63 @@ func TestServerBackgroundTaskCountStreamsAndReconnects(t *testing.T) {
 			if event.Type != EventRuntimeStatus {
 				continue
 			}
-			if event.Runtime == nil || event.Runtime.BackgroundTasks == nil || *event.Runtime.BackgroundTasks != want {
-				t.Fatalf("Runtime status = %#v, want background task count %d", event.Runtime, want)
+			if event.Runtime == nil || event.Runtime.BackgroundTasks == nil || *event.Runtime.BackgroundTasks != len(want) {
+				t.Fatalf("Runtime status = %#v, want background task count %d", event.Runtime, len(want))
+			}
+			if len(event.Runtime.BackgroundTaskDetails) != len(want) {
+				t.Fatalf("Background task details = %#v, want %#v", event.Runtime.BackgroundTaskDetails, want)
+			}
+			for i, task := range event.Runtime.BackgroundTaskDetails {
+				if task.ID != want[i].ID || task.Description != want[i].Description || !task.StartedAt.Equal(want[i].StartedAt) {
+					t.Fatalf("Background task = %#v, want %#v", task, want[i])
+				}
 			}
 			return
 		}
 	}
-	report(1)
-	first := connect()
-	readCount(first, 1)
-	report(2)
-	readCount(first, 2)
+	report(first)
+	connection := connect()
+	readTasks(connection, first)
+	report(first, second)
+	readTasks(connection, first, second)
 	reconnected := connect()
-	readCount(reconnected, 2)
+	readTasks(reconnected, first, second)
 	server.updateProviderRuntimeStatus(RuntimeStatus{Model: "test-model"})
-	readCount(reconnected, 2)
-	report(0)
-	readCount(reconnected, 0)
+	readTasks(reconnected, first, second)
+	report(second)
+	readTasks(reconnected, second)
+	report()
+	readTasks(reconnected)
 	if events := journal.Snapshot(); len(events) != 0 {
 		t.Fatalf("Background status added conversation events: %#v", events)
 	}
 	if server.backgroundActive.Load() {
 		t.Fatal("Completed background work still keeps the Session active")
+	}
+	first.StartedAt = first.StartedAt.Add(2 * time.Minute)
+	report(first)
+	readTasks(reconnected, first)
+}
+
+func TestServerBackgroundTaskDetailsAreCopied(t *testing.T) {
+	journal := NewJournal()
+	defer journal.Close()
+	server := NewServer(Config{}, journal, &fakeProvider{})
+	task := BackgroundTask{ID: "first", StartedAt: time.Date(2026, 7, 23, 12, 0, 0, 0, time.UTC)}
+	tasks := []BackgroundTask{task}
+	server.updateProviderRuntimeStatus(RuntimeStatus{BackgroundTasks: ptr.To(1), BackgroundTaskDetails: tasks})
+	tasks[0].ID = "mutated-update"
+	snapshot := server.runtimeStatusSnapshot()
+	if !reflect.DeepEqual(snapshot.BackgroundTaskDetails, []BackgroundTask{task}) {
+		t.Fatalf("Background task details = %#v, want %#v", snapshot.BackgroundTaskDetails, task)
+	}
+	snapshot.BackgroundTaskDetails[0].ID = "mutated-snapshot"
+	if got := server.runtimeStatusSnapshot().BackgroundTaskDetails; !reflect.DeepEqual(got, []BackgroundTask{task}) {
+		t.Fatalf("Background task details = %#v, want %#v", got, task)
+	}
+	server.updateProviderRuntimeStatus(RuntimeStatus{BackgroundTasks: ptr.To(1)})
+	if got := server.runtimeStatusSnapshot().BackgroundTaskDetails; len(got) != 0 {
+		t.Fatalf("Count-only runtime status retained task details: %#v", got)
 	}
 }
 
