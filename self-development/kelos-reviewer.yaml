@@ -189,6 +189,11 @@ spec:
         retry on `Expect` failures, so a transient API error short-circuits
         the poller. Either inline the call and return a zero value on error,
         or use the `Eventually(func(g Gomega) { ... })` form. P2.
+      - Flag tests whose outcome depends on real time: hard-coded dates that
+        the code under test compares with the current clock, or a fixed sleep
+        used to wait for asynchronous work. Require clock-relative fixtures
+        or an injected clock, and `Eventually`, `Consistently`, or a
+        deadline-bounded poll on an observable condition. P2.
       - When a handler has both early-return guards and a primary action
         (post a message, create a resource, emit a metric), flag tests that
         cover only the no-op branches and leave the happy path untested.
