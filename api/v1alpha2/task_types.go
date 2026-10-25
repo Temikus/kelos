@@ -131,6 +131,7 @@ type PodOverrides struct {
 	// a gVisor or Kata Containers sandbox. The RuntimeClass must exist in
 	// the cluster, or the pod is rejected at admission.
 	// +optional
+	// +kubebuilder:validation:MinLength=1
 	RuntimeClassName *string `json:"runtimeClassName,omitempty"`
 
 	// ServiceAccountName sets the pod's service account.

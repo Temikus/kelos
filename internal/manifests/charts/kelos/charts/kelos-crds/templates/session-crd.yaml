@@ -5131,6 +5131,7 @@ spec:
                           RuntimeClassName selects the RuntimeClass for the agent pod, such as
                           a gVisor or Kata Containers sandbox. The RuntimeClass must exist in
                           the cluster, or the pod is rejected at admission.
+                        minLength: 1
                         type: string
                       serviceAccountName:
                         description: |-

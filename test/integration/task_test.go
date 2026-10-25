@@ -15,6 +15,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/utils/ptr"
 
 	kelos "github.com/kelos-dev/kelos/api/v1alpha2"
 	"github.com/kelos-dev/kelos/internal/controller"
@@ -3981,6 +3982,42 @@ var _ = Describe("Task Controller", func() {
 			err := k8sClient.Update(ctx, createdTask)
 			Expect(err).Should(HaveOccurred())
 			Expect(err.Error()).To(ContainSubstring("immutable"))
+		})
+	})
+
+	Context("When creating a Task with an empty runtimeClassName", func() {
+		It("Should be rejected by the CRD schema", func() {
+			By("Creating a namespace")
+			ns := &corev1.Namespace{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: "test-task-empty-runtime-class",
+				},
+			}
+			Expect(k8sClient.Create(ctx, ns)).Should(Succeed())
+
+			By("Creating a Task with runtimeClassName set to an empty string")
+			task := &kelos.Task{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test-task-empty-runtime-class",
+					Namespace: ns.Name,
+				},
+				Spec: kelos.TaskSpec{
+					Type:   "claude-code",
+					Prompt: "Fix issue",
+					Credentials: &kelos.Credentials{
+						Type: kelos.CredentialTypeAPIKey,
+						SecretRef: &kelos.SecretReference{
+							Name: "anthropic-api-key",
+						},
+					},
+					PodOverrides: &kelos.PodOverrides{
+						RuntimeClassName: ptr.To(""),
+					},
+				},
+			}
+			err := k8sClient.Create(ctx, task)
+			Expect(err).Should(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("runtimeClassName"))
 		})
 	})
 
