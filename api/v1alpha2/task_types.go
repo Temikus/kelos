@@ -127,6 +127,12 @@ type PodOverrides struct {
 	// +optional
 	ImagePullSecrets []corev1.LocalObjectReference `json:"imagePullSecrets,omitempty"`
 
+	// RuntimeClassName selects the RuntimeClass for the agent pod, such as
+	// a gVisor or Kata Containers sandbox. The RuntimeClass must exist in
+	// the cluster, or the pod is rejected at admission.
+	// +optional
+	RuntimeClassName *string `json:"runtimeClassName,omitempty"`
+
 	// ServiceAccountName sets the pod's service account.
 	// Use with workload identity systems such as IRSA on EKS, GKE
 	// Workload Identity, or Azure Workload Identity.

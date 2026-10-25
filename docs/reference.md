@@ -30,6 +30,7 @@ Exactly one execution source is required: `spec.worker` (preferred), `spec.worke
 | `spec.podOverrides.tolerations` | Tolerations for the agent pod; use with `nodeSelector` or `affinity` to target dedicated node pools (e.g., GPU nodes, agent-specific pools) | No |
 | `spec.podOverrides.affinity` | Node, pod, and pod-anti-affinity rules. Use for spreading agents across nodes or expressing scheduling preferences beyond `nodeSelector` | No |
 | `spec.podOverrides.imagePullSecrets` | Secrets used to pull container images from private registries. Required when the agent image or any init container image is in a private registry | No |
+| `spec.podOverrides.runtimeClassName` | RuntimeClass for the agent pod, e.g. a gVisor or Kata Containers sandbox. The RuntimeClass must already exist in the cluster | No |
 | `spec.podOverrides.serviceAccountName` | Service account name for the agent pod; use with workload identity systems (IRSA, GKE Workload Identity, Azure) | No |
 | `spec.podOverrides.volumes` | Additional volumes to attach to the agent pod. Names must not be `workspace` or use the Kelos-reserved `kelos-` prefix | No |
 | `spec.podOverrides.volumeMounts` | Additional volume mounts on the agent container; names must reference either a user-supplied volume from `volumes` or a Kelos-managed volume (`workspace` or a `kelos-` volume such as `kelos-plugin` or `kelos-github-token`) | No |
