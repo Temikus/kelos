@@ -132,6 +132,8 @@ type PodOverrides struct {
 	// the cluster, or the pod is rejected at admission.
 	// +optional
 	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=253
+	// +kubebuilder:validation:Pattern=`^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$`
 	RuntimeClassName *string `json:"runtimeClassName,omitempty"`
 
 	// ServiceAccountName sets the pod's service account.
